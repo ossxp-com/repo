@@ -615,6 +615,52 @@ class Project(object):
                             R_HEADS + branch.name,
                             message = msg)
 
+  def UploadNoReview(self, opt, branch=None):
+    """If not review server defined, uploads the named branch directly to git server.
+    """
+    if branch is None:
+      branch = self.CurrentBranch
+    if branch is None:
+      raise GitError('not currently on a branch')
+
+    branch = self.GetBranch(branch)
+
+    if not branch.LocalMerge:
+      raise GitError('branch %s does not track a remote' % branch.name)
+
+    if not opt.ignore_review and branch.remote.review:
+      raise GitError('remote %s has review url, use `repo upload` instead.' % branch.remote.name)
+
+    if opt.new_branch:
+      dest_branch = branch.name
+    else:
+      dest_branch = branch.merge
+    if not dest_branch.startswith(R_HEADS):
+      dest_branch = R_HEADS + dest_branch
+
+    if not branch.remote.projectname:
+      branch.remote.projectname = self.name
+      branch.remote.Save()
+
+    # save git config branch.name.merge
+    if opt.new_branch:
+      branch.merge = dest_branch
+      branch.Save()
+
+    ref_spec = '%s:%s' % (R_HEADS + branch.name, dest_branch)
+    pushurl = self.manifest.manifestProject.config.GetString('repo.pushurl')
+    if pushurl is None:
+      pushurl = branch.remote.name
+
+    cmd = ['push']
+    if opt.force:
+      cmd.append('--force')
+    cmd.append(pushurl)
+    cmd.append(ref_spec)
+
+    if GitCommand(self, cmd).Wait() != 0:
+      raise UploadError('Upload failed')
+
 
 ## Sync ##
 
