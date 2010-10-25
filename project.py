@@ -635,6 +635,9 @@ class Project(object):
       dest_branch = branch.name
     else:
       dest_branch = branch.merge
+
+    if dest_branch.startswith(R_TAGS):
+      raise GitError('Can not push to TAGS (%s)! Run repo push with --new flag to create new feature branch.' % dest_branch)
     if not dest_branch.startswith(R_HEADS):
       dest_branch = R_HEADS + dest_branch
 
