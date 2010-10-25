@@ -663,6 +663,10 @@ class Project(object):
     if GitCommand(self, cmd).Wait() != 0:
       raise UploadError('Upload failed')
 
+    if branch.LocalMerge and branch.LocalMerge.startswith('refs/remotes'):
+      self.bare_git.UpdateRef(branch.LocalMerge,
+                              R_HEADS + branch.name)
+
 
 ## Sync ##
 
