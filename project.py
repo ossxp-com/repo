@@ -655,7 +655,9 @@ class Project(object):
     if pushurl is None:
       pushurl = branch.remote.name
     else:
-      pushurl = pushurl.rstrip('/') + '/' + self.name + ".git"
+      pushurl = pushurl.rstrip('/') + '/' + \
+                (self.name.endswith('.git') and self.name[:-4] or self.name) \
+                + ".git"
 
     cmd = ['push']
     if opt.force:

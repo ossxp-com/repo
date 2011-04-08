@@ -43,7 +43,9 @@ class _XmlRemote(object):
     url = self.fetchUrl
     while url.endswith('/'):
       url = url[:-1]
-    url += '/%s.git' % projectName
+    # Add '.git' suffix is the server's business, not add it here.
+    # Some project in git.sourceforge.net can not work with .git suffix.
+    url += '/%s' % projectName
     return RemoteSpec(self.name, url, self.reviewUrl)
 
 class XmlManifest(object):
@@ -362,7 +364,7 @@ class XmlManifest(object):
 
     path = node.getAttribute('path')
     if not path:
-      path = name
+      path = (name.endswith('.git') and name[:-4] or name)
     if path.startswith('/'):
       raise ManifestParseError, \
             "project %s path cannot be absolute in %s" % \
@@ -371,7 +373,8 @@ class XmlManifest(object):
     if self.IsMirror:
       relpath = None
       worktree = None
-      gitdir = os.path.join(self.topdir, '%s.git' % name)
+      gitdir = os.path.join(self.topdir, '%s.git' %
+               (name.endswith('.git') and name[:-4] or name))
     else:
       worktree = os.path.join(self.topdir, path)
       gitdir = os.path.join(self.repodir, 'projects/%s.git' % path)
