@@ -1,0 +1,6 @@
+From: Jiang Xin <jiangxin@ossxp.com>
+Subject: [PATCH] t/new-hacker-gpgkey-and-url
+
+Add Jiang Xin's pgp key to the keyring.
+
+Signed-off-by: Jiang Xin <jiangxin@ossxp.com>
