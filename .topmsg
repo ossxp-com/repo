@@ -1,0 +1,7 @@
+From: Jiang Xin <jiangxin@ossxp.com>
+Subject: [PATCH] t/repo-push-subcommand
+
+New repo push subcommand, which push to Git server directly,
+not through the Gerrit Server.
+
+Signed-off-by: Jiang Xin <jiangxin@ossxp.com>
