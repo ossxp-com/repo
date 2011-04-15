@@ -651,6 +651,8 @@ class Project(object):
     pushurl = self.manifest.manifestProject.config.GetString('repo.pushurl')
     if pushurl is None:
       pushurl = branch.remote.name
+    else:
+      pushurl = pushurl.rstrip('/') + '/' + self.name + ".git"
 
     cmd = ['push']
     if opt.force:
