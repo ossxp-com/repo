@@ -1,0 +1,6 @@
+From: Jiang Xin <jiangxin@ossxp.com>
+Subject: [PATCH] t/repo-config-subcommand
+
+New repo config subcommand, which add or set ManifestProject configuration.
+
+Signed-off-by: Jiang Xin <jiangxin@ossxp.com>
