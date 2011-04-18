@@ -34,18 +34,24 @@ class _XmlRemote(object):
   def __init__(self,
                name,
                fetch=None,
-               review=None):
+               review=None,
+               autodotgit=None):
     self.name = name
     self.fetchUrl = fetch
     self.reviewUrl = review
+    self.autodotgit = autodotgit
 
   def ToRemoteSpec(self, projectName):
     url = self.fetchUrl
     while url.endswith('/'):
       url = url[:-1]
-    # Add '.git' suffix is the server's business, not add it here.
-    # Some project in git.sourceforge.net can not work with .git suffix.
-    url += '/%s' % projectName
+    # Some git servers, the repositories' URLs not end with .git suffix, and
+    # if add .git suffix, the URLs not work. A example is freemind repository
+    # in git.sourceforge.net.
+    if self.autodotgit is None or self.autodotgit:
+      url += '/%s.git' % projectName
+    else:
+      url += '/%s' % projectName
     return RemoteSpec(self.name, url, self.reviewUrl)
 
 class XmlManifest(object):
@@ -327,7 +333,14 @@ class XmlManifest(object):
     review = node.getAttribute('review')
     if review == '':
       review = None
-    return _XmlRemote(name, fetch, review)
+    autodotgit = node.getAttribute('autodotgit')
+    if not autodotgit:
+      autodotgit = None
+    elif autodotgit.lower() in ('yes', 'y', 'true', 't'):
+      autodotgit = True
+    else:
+      autodotgit = False
+    return _XmlRemote(name, fetch, review, autodotgit)
 
   def _ParseDefault(self, node):
     """
@@ -364,7 +377,7 @@ class XmlManifest(object):
 
     path = node.getAttribute('path')
     if not path:
-      path = (name.endswith('.git') and name[:-4] or name)
+      path = name
     if path.startswith('/'):
       raise ManifestParseError, \
             "project %s path cannot be absolute in %s" % \
@@ -373,8 +386,7 @@ class XmlManifest(object):
     if self.IsMirror:
       relpath = None
       worktree = None
-      gitdir = os.path.join(self.topdir, '%s.git' %
-               (name.endswith('.git') and name[:-4] or name))
+      gitdir = os.path.join(self.topdir, '%s.git' % name)
     else:
       worktree = os.path.join(self.topdir, path)
       gitdir = os.path.join(self.repodir, 'projects/%s.git' % path)
