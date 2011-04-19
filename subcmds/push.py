@@ -249,7 +249,7 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
       except GitError, e:
         print >>sys.stderr, "Error: "+ str(e)
         sys.exit(1)
-        
+
 
     print >>sys.stderr, ''
     print >>sys.stderr, '--------------------------------------------'
