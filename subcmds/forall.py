@@ -151,11 +151,11 @@ terminal and are not redirected.
     first = True
 
     for project in self.GetProjects(args):
-      env = dict(os.environ.iteritems())
+      env = os.environ.copy()
       def setenv(name, val):
         if val is None:
           val = ''
-        env[name] = val
+        env[name] = val.encode()
 
       setenv('REPO_PROJECT', project.name)
       setenv('REPO_PATH', project.relpath)
@@ -168,6 +168,12 @@ terminal and are not redirected.
         cwd = project.gitdir
       else:
         cwd = project.worktree
+
+      if not os.path.exists(cwd):
+        if (opt.project_header and opt.verbose) \
+        or not opt.project_header:
+          print >>sys.stderr, 'skipping %s/' % project.relpath
+        continue
 
       if opt.project_header:
         stdin = subprocess.PIPE
