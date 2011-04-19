@@ -1,7 +1,7 @@
 From: Jiang Xin <jiangxin@ossxp.com>
-Subject: [PATCH] t/repo-push-subcommand
+Subject: [PATCH] Add .git suffix automatically to remote url
 
-New repo push subcommand, which push to Git server directly,
-not through the Gerrit Server.
+Some project like freemind's git repository in SourceForge,
+can not clone with the '.git' suffix.
 
 Signed-off-by: Jiang Xin <jiangxin@ossxp.com>
