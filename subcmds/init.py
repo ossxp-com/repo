@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import os
+import shutil
 import sys
 
 from color import Coloring
@@ -40,6 +41,13 @@ to checkout and use.  If no branch is specified, master is assumed.
 The optional -m argument can be used to specify an alternate manifest
 to be used. If no manifest is specified, the manifest default.xml
 will be used.
+
+The --reference option can be used to point to a directory that
+has the content of a --mirror sync. This will make the working
+directory use as much data as possible from the local reference
+directory when fetching from the server. This will make the sync
+go a lot faster by reducing data traffic on the network.
+
 
 Switching Manifest Branches
 ---------------------------
@@ -71,7 +79,9 @@ to update the working directory files.
     g.add_option('--mirror',
                  dest='mirror', action='store_true',
                  help='mirror the forrest')
-
+    g.add_option('--reference',
+                 dest='reference',
+                 help='location of mirror directory', metavar='DIR')
 
     # Tool
     g = p.add_option_group('repo Version options')
@@ -115,6 +125,9 @@ to update the working directory files.
       r.ResetFetch()
       r.Save()
 
+    if opt.reference:
+      m.config.SetString('repo.reference', opt.reference)
+
     if opt.mirror:
       if is_new:
         m.config.SetString('repo.mirror', 'true')
@@ -125,6 +138,11 @@ to update the working directory files.
     if not m.Sync_NetworkHalf():
       r = m.GetRemote(m.remote.name)
       print >>sys.stderr, 'fatal: cannot obtain manifest %s' % r.url
+
+      # Better delete the manifest git dir if we created it; otherwise next
+      # time (when user fixes problems) we won't go through the "is_new" logic.
+      if is_new:
+        shutil.rmtree(m.gitdir)
       sys.exit(1)
 
     syncbuf = SyncBuffer(m.config)

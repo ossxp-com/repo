@@ -28,7 +28,7 @@ import re
 import sys
 
 from trace import SetTrace
-from git_config import close_ssh
+from git_config import init_ssh, close_ssh
 from command import InteractiveCommand
 from command import MirrorSafeCommand
 from command import PagedCommand
@@ -61,6 +61,8 @@ class _Repo(object):
   def __init__(self, repodir):
     self.repodir = repodir
     self.commands = all_commands
+    # add 'branch' as an alias for 'branches'
+    all_commands['branch'] = all_commands['branches']
 
   def _Run(self, argv):
     name = None
@@ -214,6 +216,7 @@ def _Main(argv):
   repo = _Repo(opt.repodir)
   try:
     try:
+      init_ssh()
       repo._Run(argv)
     finally:
       close_ssh()

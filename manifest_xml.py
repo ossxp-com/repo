@@ -115,6 +115,15 @@ class XmlManifest(object):
     root = doc.createElement('manifest')
     doc.appendChild(root)
 
+    # Save out the notice.  There's a little bit of work here to give it the
+    # right whitespace, which assumes that the notice is automatically indented
+    # by 4 by minidom.
+    if self.notice:
+      notice_element = root.appendChild(doc.createElement('notice'))
+      notice_lines = self.notice.splitlines()
+      indented_notice = ('\n'.join(" "*4 + line for line in notice_lines))[4:]
+      notice_element.appendChild(doc.createTextNode(indented_notice))
+
     d = self.default
     sort_remotes = list(self.remotes.keys())
     sort_remotes.sort()
@@ -170,6 +179,14 @@ class XmlManifest(object):
         ce.setAttribute('dest', c.dest)
         e.appendChild(ce)
 
+    if self._repo_hooks_project:
+      root.appendChild(doc.createTextNode(''))
+      e = doc.createElement('repo-hooks')
+      e.setAttribute('in-project', self._repo_hooks_project.name)
+      e.setAttribute('enabled-list',
+                     ' '.join(self._repo_hooks_project.enabled_repo_hooks))
+      root.appendChild(e)
+
     doc.writexml(fd, '', '  ', '\n', 'UTF-8')
 
   @property
@@ -188,6 +205,16 @@ class XmlManifest(object):
     return self._default
 
   @property
+  def repo_hooks_project(self):
+    self._Load()
+    return self._repo_hooks_project
+
+  @property
+  def notice(self):
+    self._Load()
+    return self._notice
+
+  @property
   def manifest_server(self):
     self._Load()
     return self._manifest_server
@@ -201,6 +228,8 @@ class XmlManifest(object):
     self._projects = {}
     self._remotes = {}
     self._default = None
+    self._repo_hooks_project = None
+    self._notice = None
     self.branch = None
     self._manifest_server = None
 
@@ -232,15 +261,15 @@ class XmlManifest(object):
   def _ParseManifest(self, is_root_file):
     root = xml.dom.minidom.parse(self.manifestFile)
     if not root or not root.childNodes:
-      raise ManifestParseError, \
-            "no root node in %s" % \
-            self.manifestFile
+      raise ManifestParseError(
+          "no root node in %s" %
+          self.manifestFile)
 
     config = root.childNodes[0]
     if config.nodeName != 'manifest':
-      raise ManifestParseError, \
-            "no <manifest> in %s" % \
-            self.manifestFile
+      raise ManifestParseError(
+          "no <manifest> in %s" %
+          self.manifestFile)
 
     for node in config.childNodes:
       if node.nodeName == 'remove-project':
@@ -248,46 +277,82 @@ class XmlManifest(object):
         try:
           del self._projects[name]
         except KeyError:
-          raise ManifestParseError, \
-                'project %s not found' % \
-                (name)
+          raise ManifestParseError(
+              'project %s not found' %
+              (name))
+
+        # If the manifest removes the hooks project, treat it as if it deleted
+        # the repo-hooks element too.
+        if self._repo_hooks_project and (self._repo_hooks_project.name == name):
+          self._repo_hooks_project = None
 
     for node in config.childNodes:
       if node.nodeName == 'remote':
         remote = self._ParseRemote(node)
         if self._remotes.get(remote.name):
-          raise ManifestParseError, \
-                'duplicate remote %s in %s' % \
-                (remote.name, self.manifestFile)
+          raise ManifestParseError(
+              'duplicate remote %s in %s' %
+              (remote.name, self.manifestFile))
         self._remotes[remote.name] = remote
 
     for node in config.childNodes:
       if node.nodeName == 'default':
         if self._default is not None:
-          raise ManifestParseError, \
-                'duplicate default in %s' % \
-                (self.manifestFile)
+          raise ManifestParseError(
+              'duplicate default in %s' %
+              (self.manifestFile))
         self._default = self._ParseDefault(node)
     if self._default is None:
       self._default = _Default()
 
     for node in config.childNodes:
+      if node.nodeName == 'notice':
+        if self._notice is not None:
+          raise ManifestParseError(
+              'duplicate notice in %s' %
+              (self.manifestFile))
+        self._notice = self._ParseNotice(node)
+
+    for node in config.childNodes:
       if node.nodeName == 'manifest-server':
         url = self._reqatt(node, 'url')
         if self._manifest_server is not None:
-            raise ManifestParseError, \
-                'duplicate manifest-server in %s' % \
-                (self.manifestFile)
+            raise ManifestParseError(
+                'duplicate manifest-server in %s' %
+                (self.manifestFile))
         self._manifest_server = url
 
     for node in config.childNodes:
       if node.nodeName == 'project':
         project = self._ParseProject(node)
         if self._projects.get(project.name):
-          raise ManifestParseError, \
-                'duplicate project %s in %s' % \
-                (project.name, self.manifestFile)
+          raise ManifestParseError(
+              'duplicate project %s in %s' %
+              (project.name, self.manifestFile))
         self._projects[project.name] = project
+
+    for node in config.childNodes:
+      if node.nodeName == 'repo-hooks':
+        # Get the name of the project and the (space-separated) list of enabled.
+        repo_hooks_project = self._reqatt(node, 'in-project')
+        enabled_repo_hooks = self._reqatt(node, 'enabled-list').split()
+
+        # Only one project can be the hooks project
+        if self._repo_hooks_project is not None:
+          raise ManifestParseError(
+              'duplicate repo-hooks in %s' %
+              (self.manifestFile))
+
+        # Store a reference to the Project.
+        try:
+          self._repo_hooks_project = self._projects[repo_hooks_project]
+        except KeyError:
+          raise ManifestParseError(
+              'project %s not found for repo-hooks' %
+              (repo_hooks_project))
+
+        # Store the enabled hooks in the Project object.
+        self._repo_hooks_project.enabled_repo_hooks = enabled_repo_hooks
 
   def _AddMetaProjectMirror(self, m):
     name = None
@@ -353,6 +418,45 @@ class XmlManifest(object):
       d.revisionExpr = None
     return d
 
+  def _ParseNotice(self, node):
+    """
+    reads a <notice> element from the manifest file
+
+    The <notice> element is distinct from other tags in the XML in that the
+    data is conveyed between the start and end tag (it's not an empty-element
+    tag).
+
+    The white space (carriage returns, indentation) for the notice element is
+    relevant and is parsed in a way that is based on how python docstrings work.
+    In fact, the code is remarkably similar to here:
+      http://www.python.org/dev/peps/pep-0257/
+    """
+    # Get the data out of the node...
+    notice = node.childNodes[0].data
+
+    # Figure out minimum indentation, skipping the first line (the same line
+    # as the <notice> tag)...
+    minIndent = sys.maxint
+    lines = notice.splitlines()
+    for line in lines[1:]:
+      lstrippedLine = line.lstrip()
+      if lstrippedLine:
+        indent = len(line) - len(lstrippedLine)
+        minIndent = min(indent, minIndent)
+
+    # Strip leading / trailing blank lines and also indentation.
+    cleanLines = [lines[0].strip()]
+    for line in lines[1:]:
+      cleanLines.append(line[minIndent:].rstrip())
+
+    # Clear completely blank lines from front and back...
+    while cleanLines and not cleanLines[0]:
+      del cleanLines[0]
+    while cleanLines and not cleanLines[-1]:
+      del cleanLines[-1]
+
+    return '\n'.join(cleanLines)
+
   def _ParseProject(self, node):
     """
     reads a <project> element from the manifest file
@@ -388,7 +492,7 @@ class XmlManifest(object):
       worktree = None
       gitdir = os.path.join(self.topdir, '%s.git' % name)
     else:
-      worktree = os.path.join(self.topdir, path)
+      worktree = os.path.join(self.topdir, path).replace('\\', '/')
       gitdir = os.path.join(self.repodir, 'projects/%s.git' % path)
 
     project = Project(manifest = self,
