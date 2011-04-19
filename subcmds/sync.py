@@ -39,6 +39,10 @@ from project import R_HEADS
 from project import SyncBuffer
 from progress import Progress
 
+class _FetchError(Exception):
+  """Internal error thrown in _FetchHelper() when we don't want stack trace."""
+  pass
+
 class Sync(Command, MirrorSafeCommand):
   jobs = 1
   common = True
@@ -69,6 +73,9 @@ revision is temporarily needed.
 The -s/--smart-sync option can be used to sync to a known good
 build as specified by the manifest-server element in the current
 manifest.
+
+The -f/--force-broken option can be used to proceed with syncing
+other projects if a project sync fails.
 
 SSH Connections
 ---------------
@@ -101,6 +108,9 @@ later is required to fix a server side protocol bug.
 """
 
   def _Options(self, p, show_smart=True):
+    p.add_option('-f', '--force-broken',
+                 dest='force_broken', action='store_true',
+                 help="continue sync even if a project fails to sync")
     p.add_option('-l','--local-only',
                  dest='local_only', action='store_true',
                  help="only update working tree, don't fetch")
@@ -110,6 +120,9 @@ later is required to fix a server side protocol bug.
     p.add_option('-d','--detach',
                  dest='detach_head', action='store_true',
                  help='detach projects back to manifest revision')
+    p.add_option('-q','--quiet',
+                 dest='quiet', action='store_true',
+                 help='be more quiet')
     p.add_option('-j','--jobs',
                  dest='jobs', action='store', type='int',
                  help="number of projects to fetch simultaneously")
@@ -126,45 +139,111 @@ later is required to fix a server side protocol bug.
                  dest='repo_upgraded', action='store_true',
                  help=SUPPRESS_HELP)
 
-  def _FetchHelper(self, project, lock, fetched, pm, sem):
-      if not project.Sync_NetworkHalf():
-        print >>sys.stderr, 'error: Cannot fetch %s' % project.name
+  def _FetchHelper(self, opt, project, lock, fetched, pm, sem, err_event):
+      """Main function of the fetch threads when jobs are > 1.
+
+      Args:
+        opt: Program options returned from optparse.  See _Options().
+        project: Project object for the project to fetch.
+        lock: Lock for accessing objects that are shared amongst multiple
+            _FetchHelper() threads.
+        fetched: set object that we will add project.gitdir to when we're done
+            (with our lock held).
+        pm: Instance of a Project object.  We will call pm.update() (with our
+            lock held).
+        sem: We'll release() this semaphore when we exit so that another thread
+            can be started up.
+        err_event: We'll set this event in the case of an error (after printing
+            out info about the error).
+      """
+      # We'll set to true once we've locked the lock.
+      did_lock = False
+
+      # Encapsulate everything in a try/except/finally so that:
+      # - We always set err_event in the case of an exception.
+      # - We always make sure we call sem.release().
+      # - We always make sure we unlock the lock if we locked it.
+      try:
+        try:
+          success = project.Sync_NetworkHalf(quiet=opt.quiet)
+
+          # Lock around all the rest of the code, since printing, updating a set
+          # and Progress.update() are not thread safe.
+          lock.acquire()
+          did_lock = True
+
+          if not success:
+            print >>sys.stderr, 'error: Cannot fetch %s' % project.name
+            if opt.force_broken:
+              print >>sys.stderr, 'warn: --force-broken, continuing to sync'
+            else:
+              raise _FetchError()
+
+          fetched.add(project.gitdir)
+          pm.update()
+        except BaseException, e:
+          # Notify the _Fetch() function about all errors.
+          err_event.set()
+
+          # If we got our own _FetchError, we don't want a stack trace.
+          # However, if we got something else (something in Sync_NetworkHalf?),
+          # we'd like one (so re-raise after we've set err_event).
+          if not isinstance(e, _FetchError):
+            raise
+      finally:
+        if did_lock:
+          lock.release()
         sem.release()
-        sys.exit(1)
 
-      lock.acquire()
-      fetched.add(project.gitdir)
-      pm.update()
-      lock.release()
-      sem.release()
-
-  def _Fetch(self, projects):
+  def _Fetch(self, projects, opt):
     fetched = set()
     pm = Progress('Fetching projects', len(projects))
 
     if self.jobs == 1:
       for project in projects:
         pm.update()
-        if project.Sync_NetworkHalf():
+        if project.Sync_NetworkHalf(quiet=opt.quiet):
           fetched.add(project.gitdir)
         else:
           print >>sys.stderr, 'error: Cannot fetch %s' % project.name
-          sys.exit(1)
+          if opt.force_broken:
+            print >>sys.stderr, 'warn: --force-broken, continuing to sync'
+          else:
+            sys.exit(1)
     else:
       threads = set()
       lock = _threading.Lock()
       sem = _threading.Semaphore(self.jobs)
+      err_event = _threading.Event()
       for project in projects:
+        # Check for any errors before starting any new threads.
+        # ...we'll let existing threads finish, though.
+        if err_event.isSet():
+          break
+
         sem.acquire()
         t = _threading.Thread(target = self._FetchHelper,
-                             args = (project, lock, fetched, pm, sem))
+                              args = (opt,
+                                      project,
+                                      lock,
+                                      fetched,
+                                      pm,
+                                      sem,
+                                      err_event))
         threads.add(t)
         t.start()
 
       for t in threads:
         t.join()
 
+      # If we saw an error, exit with code 1 so that other scripts can check.
+      if err_event.isSet():
+        print >>sys.stderr, '\nerror: Exited sync due to fetch errors'
+        sys.exit(1)
+
     pm.end()
+    for project in projects:
+      project.bare_git.gc('--auto')
     return fetched
 
   def UpdateProjectList(self):
@@ -249,7 +328,7 @@ uncommitted changes are present' % project.relpath
         if branch.startswith(R_HEADS):
           branch = branch[len(R_HEADS):]
 
-        env = dict(os.environ)
+        env = os.environ.copy()
         if (env.has_key('TARGET_PRODUCT') and
             env.has_key('TARGET_BUILD_VARIANT')):
           target = '%s-%s' % (env['TARGET_PRODUCT'],
@@ -291,7 +370,7 @@ uncommitted changes are present' % project.relpath
       _PostRepoUpgrade(self.manifest)
 
     if not opt.local_only:
-      mp.Sync_NetworkHalf()
+      mp.Sync_NetworkHalf(quiet=opt.quiet)
 
     if mp.HasChanges:
       syncbuf = SyncBuffer(mp.config)
@@ -308,7 +387,7 @@ uncommitted changes are present' % project.relpath
         to_fetch.append(rp)
       to_fetch.extend(all)
 
-      fetched = self._Fetch(to_fetch)
+      fetched = self._Fetch(to_fetch, opt)
       _PostRepoFetch(rp, opt.no_repo_verify)
       if opt.network_only:
         # bail out now; the rest touches the working tree
@@ -320,7 +399,7 @@ uncommitted changes are present' % project.relpath
         for project in all:
           if project.gitdir not in fetched:
             missing.append(project)
-        self._Fetch(missing)
+        self._Fetch(missing, opt)
 
     if self.manifest.IsMirror:
       # bail out now, we have no working tree
@@ -340,6 +419,11 @@ uncommitted changes are present' % project.relpath
     print >>sys.stderr
     if not syncbuf.Finish():
       sys.exit(1)
+
+    # If there's a notice that's supposed to print at the end of the sync, print
+    # it now...
+    if self.manifest.notice:
+      print self.manifest.notice
 
 def _PostRepoUpgrade(manifest):
   for project in manifest.projects.values():
@@ -388,9 +472,9 @@ warning: Cannot automatically authenticate repo."""
       % (project.name, rev)
     return False
 
-  env = dict(os.environ)
-  env['GIT_DIR'] = project.gitdir
-  env['GNUPGHOME'] = gpg_dir
+  env = os.environ.copy()
+  env['GIT_DIR'] = project.gitdir.encode()
+  env['GNUPGHOME'] = gpg_dir.encode()
 
   cmd = [GIT, 'tag', '-v', cur]
   proc = subprocess.Popen(cmd,
