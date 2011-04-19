@@ -658,7 +658,10 @@ class Project(object):
     if not pushurl:
       pushurl = branch.remote.name
     else:
-      pushurl = pushurl.rstrip('/') + '/' + self.name + ".git"
+      pushurl = pushurl.rstrip('/') + '/' + self.name
+      remote = self.manifest.remotes.get(branch.remote.name)
+      if remote and remote.autodotgit is not False:
+        pushurl += ".git"
 
     cmd = ['push']
     if opt.force:

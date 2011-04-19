@@ -34,16 +34,24 @@ class _XmlRemote(object):
   def __init__(self,
                name,
                fetch=None,
-               review=None):
+               review=None,
+               autodotgit=None):
     self.name = name
     self.fetchUrl = fetch
     self.reviewUrl = review
+    self.autodotgit = autodotgit
 
   def ToRemoteSpec(self, projectName):
     url = self.fetchUrl
     while url.endswith('/'):
       url = url[:-1]
-    url += '/%s.git' % projectName
+    # Some git servers, the repositories' URLs not end with .git suffix, and
+    # if add .git suffix, the URLs not work. A example is freemind repository
+    # in git.sourceforge.net.
+    if self.autodotgit is None or self.autodotgit:
+      url += '/%s.git' % projectName
+    else:
+      url += '/%s' % projectName
     return RemoteSpec(self.name, url, self.reviewUrl)
 
 class XmlManifest(object):
@@ -325,7 +333,14 @@ class XmlManifest(object):
     review = node.getAttribute('review')
     if review == '':
       review = None
-    return _XmlRemote(name, fetch, review)
+    autodotgit = node.getAttribute('autodotgit')
+    if not autodotgit:
+      autodotgit = None
+    elif autodotgit.lower() in ('yes', 'y', 'true', 't'):
+      autodotgit = True
+    else:
+      autodotgit = False
+    return _XmlRemote(name, fetch, review, autodotgit)
 
   def _ParseDefault(self, node):
     """
