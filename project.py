@@ -651,8 +651,11 @@ class Project(object):
       branch.Save()
 
     ref_spec = '%s:%s' % (R_HEADS + branch.name, dest_branch)
-    pushurl = self.manifest.manifestProject.config.GetString('repo.pushurl')
-    if pushurl is None:
+    pushurl = self.manifest.manifestProject.config.GetString('repo.%s.pushurl'
+              % branch.remote.name)
+    if not pushurl:
+      pushurl = self.manifest.manifestProject.config.GetString('repo.pushurl')
+    if not pushurl:
       pushurl = branch.remote.name
     else:
       pushurl = pushurl.rstrip('/') + '/' + self.name + ".git"
