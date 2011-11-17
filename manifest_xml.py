@@ -41,12 +41,14 @@ class _XmlRemote(object):
                name,
                fetch=None,
                manifestUrl=None,
-               review=None):
+               review=None,
+               autodotgit=None):
     self.name = name
     self.fetchUrl = fetch
     self.manifestUrl = manifestUrl
     self.reviewUrl = review
     self.resolvedFetchUrl = self._resolveFetchUrl()
+    self.autodotgit = autodotgit
 
   def _resolveFetchUrl(self):
     url = self.fetchUrl.rstrip('/')
@@ -60,6 +62,11 @@ class _XmlRemote(object):
 
   def ToRemoteSpec(self, projectName):
     url = self.resolvedFetchUrl.rstrip('/') + '/' + projectName
+    # Some git servers, the repositories' URLs not end with .git suffix, and
+    # if add .git suffix, the URLs not work. A example is freemind repository
+    # in git.sourceforge.net.
+    if self.autodotgit is None or self.autodotgit:
+      url += '.git'
     return RemoteSpec(self.name, url, self.reviewUrl)
 
 class XmlManifest(object):
@@ -410,8 +417,15 @@ class XmlManifest(object):
     review = node.getAttribute('review')
     if review == '':
       review = None
+    autodotgit = node.getAttribute('autodotgit')
+    if not autodotgit:
+      autodotgit = None
+    elif autodotgit.lower() in ('yes', 'y', 'true', 't'):
+      autodotgit = True
+    else:
+      autodotgit = False
     manifestUrl = self.manifestProject.config.GetString('remote.origin.url')
-    return _XmlRemote(name, fetch, manifestUrl, review)
+    return _XmlRemote(name, fetch, manifestUrl, review, autodotgit)
 
   def _ParseDefault(self, node):
     """
