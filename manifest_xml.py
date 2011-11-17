@@ -14,7 +14,9 @@
 # limitations under the License.
 
 import os
+import re
 import sys
+import urlparse
 import xml.dom.minidom
 
 from git_config import GitConfig, IsId
@@ -24,34 +26,47 @@ from error import ManifestParseError
 MANIFEST_FILE_NAME = 'manifest.xml'
 LOCAL_MANIFEST_NAME = 'local_manifest.xml'
 
+urlparse.uses_relative.extend(['ssh', 'git'])
+urlparse.uses_netloc.extend(['ssh', 'git'])
+
 class _Default(object):
   """Project defaults within the manifest."""
 
   revisionExpr = None
   remote = None
+  sync_j = 1
 
 class _XmlRemote(object):
   def __init__(self,
                name,
                fetch=None,
+               manifestUrl=None,
                review=None,
                autodotgit=None):
     self.name = name
     self.fetchUrl = fetch
+    self.manifestUrl = manifestUrl
     self.reviewUrl = review
+    self.resolvedFetchUrl = self._resolveFetchUrl()
     self.autodotgit = autodotgit
 
+  def _resolveFetchUrl(self):
+    url = self.fetchUrl.rstrip('/')
+    manifestUrl = self.manifestUrl.rstrip('/')
+    # urljoin will get confused if there is no scheme in the base url
+    # ie, if manifestUrl is of the form <hostname:port>
+    if manifestUrl.find(':') != manifestUrl.find('/') - 1:
+        manifestUrl = 'gopher://' + manifestUrl
+    url = urlparse.urljoin(manifestUrl, url)
+    return re.sub(r'^gopher://', '', url)
+
   def ToRemoteSpec(self, projectName):
-    url = self.fetchUrl
-    while url.endswith('/'):
-      url = url[:-1]
+    url = self.resolvedFetchUrl.rstrip('/') + '/' + projectName
     # Some git servers, the repositories' URLs not end with .git suffix, and
     # if add .git suffix, the URLs not work. A example is freemind repository
     # in git.sourceforge.net.
     if self.autodotgit is None or self.autodotgit:
-      url += '/%s.git' % projectName
-    else:
-      url += '/%s' % projectName
+      url += '.git'
     return RemoteSpec(self.name, url, self.reviewUrl)
 
 class XmlManifest(object):
@@ -141,6 +156,9 @@ class XmlManifest(object):
     if d.revisionExpr:
       have_default = True
       e.setAttribute('revision', d.revisionExpr)
+    if d.sync_j > 1:
+      have_default = True
+      e.setAttribute('sync-j', '%d' % d.sync_j)
     if have_default:
       root.appendChild(e)
       root.appendChild(doc.createTextNode(''))
@@ -361,7 +379,7 @@ class XmlManifest(object):
       raise ManifestParseError, 'refusing to mirror %s' % m_url
 
     if self._default and self._default.remote:
-      url = self._default.remote.fetchUrl
+      url = self._default.remote.resolvedFetchUrl
       if not url.endswith('/'):
         url += '/'
       if m_url.startswith(url):
@@ -370,7 +388,8 @@ class XmlManifest(object):
 
     if name is None:
       s = m_url.rindex('/') + 1
-      remote = _XmlRemote('origin', m_url[:s])
+      manifestUrl = self.manifestProject.config.GetString('remote.origin.url')
+      remote = _XmlRemote('origin', m_url[:s], manifestUrl)
       name = m_url[s:]
 
     if name.endswith('.git'):
@@ -405,7 +424,8 @@ class XmlManifest(object):
       autodotgit = True
     else:
       autodotgit = False
-    return _XmlRemote(name, fetch, review, autodotgit)
+    manifestUrl = self.manifestProject.config.GetString('remote.origin.url')
+    return _XmlRemote(name, fetch, manifestUrl, review, autodotgit)
 
   def _ParseDefault(self, node):
     """
@@ -416,6 +436,11 @@ class XmlManifest(object):
     d.revisionExpr = node.getAttribute('revision')
     if d.revisionExpr == '':
       d.revisionExpr = None
+    sync_j = node.getAttribute('sync-j')
+    if sync_j == '' or sync_j is None:
+      d.sync_j = 1
+    else:
+      d.sync_j = int(sync_j)
     return d
 
   def _ParseNotice(self, node):
