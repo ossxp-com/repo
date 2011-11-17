@@ -22,17 +22,22 @@ if __name__ == '__main__':
     del sys.argv[-1]
 del magic
 
+import netrc
 import optparse
 import os
 import re
 import sys
+import time
+import urllib2
 
 from trace import SetTrace
+from git_command import git, GitCommand
 from git_config import init_ssh, close_ssh
 from command import InteractiveCommand
 from command import MirrorSafeCommand
 from command import PagedCommand
 from editor import Editor
+from error import DownloadError
 from error import ManifestInvalidRevisionError
 from error import NoSuchProjectError
 from error import RepoChangedException
@@ -53,6 +58,9 @@ global_options.add_option('--no-pager',
 global_options.add_option('--trace',
                           dest='trace', action='store_true',
                           help='trace git command execution')
+global_options.add_option('--time',
+                          dest='time', action='store_true',
+                          help='time repo command execution')
 global_options.add_option('--version',
                           dest='show_version', action='store_true',
                           help='display this version of repo')
@@ -122,7 +130,23 @@ class _Repo(object):
         RunPager(config)
 
     try:
-      cmd.Execute(copts, cargs)
+      start = time.time()
+      try:
+        cmd.Execute(copts, cargs)
+      finally:
+        elapsed = time.time() - start
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if gopts.time:
+          if hours == 0:
+            print >>sys.stderr, 'real\t%dm%.3fs' \
+              % (minutes, seconds)
+          else:
+            print >>sys.stderr, 'real\t%dh%dm%.3fs' \
+              % (hours, minutes, seconds)
+    except DownloadError, e:
+      print >>sys.stderr, 'error: %s' % str(e)
+      sys.exit(1)
     except ManifestInvalidRevisionError, e:
       print >>sys.stderr, 'error: %s' % str(e)
       sys.exit(1)
@@ -132,6 +156,9 @@ class _Repo(object):
       else:
         print >>sys.stderr, 'error: no project in current directory'
       sys.exit(1)
+
+def _MyRepoPath():
+  return os.path.dirname(__file__)
 
 def _MyWrapperPath():
   return os.path.join(os.path.dirname(__file__), 'repo')
@@ -199,6 +226,95 @@ def _PruneOptions(argv, opt):
       continue
     i += 1
 
+_user_agent = None
+
+def _UserAgent():
+  global _user_agent
+
+  if _user_agent is None:
+    py_version = sys.version_info
+
+    os_name = sys.platform
+    if os_name == 'linux2':
+      os_name = 'Linux'
+    elif os_name == 'win32':
+      os_name = 'Win32'
+    elif os_name == 'cygwin':
+      os_name = 'Cygwin'
+    elif os_name == 'darwin':
+      os_name = 'Darwin'
+
+    p = GitCommand(
+      None, ['describe', 'HEAD'],
+      cwd = _MyRepoPath(),
+      capture_stdout = True)
+    if p.Wait() == 0:
+      repo_version = p.stdout
+      if len(repo_version) > 0 and repo_version[-1] == '\n':
+        repo_version = repo_version[0:-1]
+      if len(repo_version) > 0 and repo_version[0] == 'v':
+        repo_version = repo_version[1:]
+    else:
+      repo_version = 'unknown'
+
+    _user_agent = 'git-repo/%s (%s) git/%s Python/%d.%d.%d' % (
+      repo_version,
+      os_name,
+      '.'.join(map(lambda d: str(d), git.version_tuple())),
+      py_version[0], py_version[1], py_version[2])
+  return _user_agent
+
+class _UserAgentHandler(urllib2.BaseHandler):
+  def http_request(self, req):
+    req.add_header('User-Agent', _UserAgent())
+    return req
+
+  def https_request(self, req):
+    req.add_header('User-Agent', _UserAgent())
+    return req
+
+class _BasicAuthHandler(urllib2.HTTPBasicAuthHandler):
+  def http_error_auth_reqed(self, authreq, host, req, headers):
+    try:
+      old_add_header = req.add_header
+      def _add_header(name, val):
+        val = val.replace('\n', '')
+        old_add_header(name, val)
+      req.add_header = _add_header
+      return urllib2.AbstractBasicAuthHandler.http_error_auth_reqed(
+        self, authreq, host, req, headers)
+    except:
+      reset = getattr(self, 'reset_retry_count', None)
+      if reset is not None:
+        reset()
+      elif getattr(self, 'retried', None):
+        self.retried = 0
+      raise
+
+def init_http():
+  handlers = [_UserAgentHandler()]
+
+  mgr = urllib2.HTTPPasswordMgrWithDefaultRealm()
+  try:
+    n = netrc.netrc()
+    for host in n.hosts:
+      p = n.hosts[host]
+      mgr.add_password(None, 'http://%s/'  % host, p[0], p[2])
+      mgr.add_password(None, 'https://%s/' % host, p[0], p[2])
+  except netrc.NetrcParseError:
+    pass
+  except IOError:
+    pass
+  handlers.append(_BasicAuthHandler(mgr))
+
+  if 'http_proxy' in os.environ:
+    url = os.environ['http_proxy']
+    handlers.append(urllib2.ProxyHandler({'http': url, 'https': url}))
+  if 'REPO_CURL_VERBOSE' in os.environ:
+    handlers.append(urllib2.HTTPHandler(debuglevel=1))
+    handlers.append(urllib2.HTTPSHandler(debuglevel=1))
+  urllib2.install_opener(urllib2.build_opener(*handlers))
+
 def _Main(argv):
   opt = optparse.OptionParser(usage="repo wrapperinfo -- ...")
   opt.add_option("--repo-dir", dest="repodir",
@@ -217,6 +333,7 @@ def _Main(argv):
   try:
     try:
       init_ssh()
+      init_http()
       repo._Run(argv)
     finally:
       close_ssh()
