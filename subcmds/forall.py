@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import print_function
 import fcntl
 import re
 import os
@@ -82,11 +83,19 @@ revision to a locally executed git command, use REPO_LREV.
 REPO_RREV is the name of the revision from the manifest, exactly
 as written in the manifest.
 
+REPO__* are any extra environment variables, specified by the
+"annotation" element under any project element.  This can be useful
+for differentiating trees based on user-specific criteria, or simply
+annotating tree details.
+
 shell positional arguments ($1, $2, .., $#) are set to any arguments
 following <command>.
 
 Unless -p is used, stdin, stdout, stderr are inherited from the
 terminal and are not redirected.
+
+If -e is used, when a command exits unsuccessfully, '%prog' will abort
+without iterating through the remaining projects.
 """
 
   def _Options(self, p):
@@ -99,6 +108,9 @@ terminal and are not redirected.
                  dest='command',
                  action='callback',
                  callback=cmd)
+    p.add_option('-e', '--abort-on-errors',
+                 dest='abort_on_errors', action='store_true',
+                 help='Abort if a command exits unsuccessfully')
 
     g = p.add_option_group('Output')
     g.add_option('-p',
@@ -136,12 +148,16 @@ terminal and are not redirected.
       for cn in cmd[1:]:
         if not cn.startswith('-'):
           break
-      if cn in _CAN_COLOR:
+      else:
+        cn = None
+      # pylint: disable=W0631
+      if cn and cn in _CAN_COLOR:
         class ColorCmd(Coloring):
           def __init__(self, config, cmd):
             Coloring.__init__(self, config, cmd)
         if ColorCmd(self.manifest.manifestProject.config, cn).is_on:
           cmd.insert(cmd.index(cn) + 1, '--color')
+      # pylint: enable=W0631
 
     mirror = self.manifest.IsMirror
     out = ForallColoring(self.manifest.manifestProject.config)
@@ -162,6 +178,8 @@ terminal and are not redirected.
       setenv('REPO_REMOTE', project.remote.name)
       setenv('REPO_LREV', project.GetRevisionId())
       setenv('REPO_RREV', project.revisionExpr)
+      for a in project.annotations:
+        setenv("REPO__%s" % (a.name), a.value)
 
       if mirror:
         setenv('GIT_DIR', project.gitdir)
@@ -172,7 +190,7 @@ terminal and are not redirected.
       if not os.path.exists(cwd):
         if (opt.project_header and opt.verbose) \
         or not opt.project_header:
-          print >>sys.stderr, 'skipping %s/' % project.relpath
+          print('skipping %s/' % project.relpath, file=sys.stderr)
         continue
 
       if opt.project_header:
@@ -201,7 +219,6 @@ terminal and are not redirected.
             return self.fd.fileno()
 
         empty = True
-        didout = False
         errbuf = ''
 
         p.stdin.close()
@@ -213,7 +230,7 @@ terminal and are not redirected.
           fcntl.fcntl(s.fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
         while s_in:
-          in_ready, out_ready, err_ready = select.select(s_in, [], [])
+          in_ready, _out_ready, _err_ready = select.select(s_in, [], [])
           for s in in_ready:
             buf = s.fd.read(4096)
             if not buf:
@@ -222,9 +239,7 @@ terminal and are not redirected.
               continue
 
             if not opt.verbose:
-              if s.fd == p.stdout:
-                didout = True
-              else:
+              if s.fd != p.stdout:
                 errbuf += buf
                 continue
 
@@ -246,7 +261,12 @@ terminal and are not redirected.
             s.dest.flush()
 
       r = p.wait()
-      if r != 0 and r != rc:
-        rc = r
+      if r != 0:
+        if r != rc:
+          rc = r
+        if opt.abort_on_errors:
+          print("error: %s: Aborting due to previous error" % project.relpath,
+                file=sys.stderr)
+          sys.exit(r)
     if rc != 0:
       sys.exit(rc)

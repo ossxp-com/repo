@@ -13,12 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import print_function
 import sys
 
 from command import Command
 from git_command import GitCommand
-from git_refs import GitRefs, HEAD, R_HEADS, R_TAGS, R_PUB, R_M
-from error import GitError
 
 class Rebase(Command):
   common = True
@@ -52,20 +51,25 @@ branch but need to incorporate new upstream changes "underneath" them.
     p.add_option('--whitespace',
                  dest='whitespace', action='store', metavar='WS',
                  help='Pass --whitespace to git rebase')
+    p.add_option('--auto-stash',
+                 dest='auto_stash', action='store_true',
+                 help='Stash local modifications before starting')
 
   def Execute(self, opt, args):
-    all = self.GetProjects(args)
-    one_project = len(all) == 1
+    all_projects = self.GetProjects(args)
+    one_project = len(all_projects) == 1
 
     if opt.interactive and not one_project:
-      print >>sys.stderr, 'error: interactive rebase not supported with multiple projects'
+      print('error: interactive rebase not supported with multiple projects',
+            file=sys.stderr)
       return -1
 
-    for project in all:
+    for project in all_projects:
       cb = project.CurrentBranch
       if not cb:
         if one_project:
-          print >>sys.stderr, "error: project %s has a detatched HEAD" % project.relpath
+          print("error: project %s has a detatched HEAD" % project.relpath,
+                file=sys.stderr)
           return -1
         # ignore branches with detatched HEADs
         continue
@@ -73,7 +77,8 @@ branch but need to incorporate new upstream changes "underneath" them.
       upbranch = project.GetBranch(cb)
       if not upbranch.LocalMerge:
         if one_project:
-          print >>sys.stderr, "error: project %s does not track any remote branches" % project.relpath
+          print("error: project %s does not track any remote branches"
+                % project.relpath, file=sys.stderr)
           return -1
         # ignore branches without remotes
         continue
@@ -100,8 +105,26 @@ branch but need to incorporate new upstream changes "underneath" them.
 
       args.append(upbranch.LocalMerge)
 
-      print >>sys.stderr, '# %s: rebasing %s -> %s' % \
-        (project.relpath, cb, upbranch.LocalMerge)
+      print('# %s: rebasing %s -> %s'
+            % (project.relpath, cb, upbranch.LocalMerge), file=sys.stderr)
+
+      needs_stash = False
+      if opt.auto_stash:
+        stash_args = ["update-index", "--refresh", "-q"]
+
+        if GitCommand(project, stash_args).Wait() != 0:
+          needs_stash = True
+          # Dirty index, requires stash...
+          stash_args = ["stash"]
+
+          if GitCommand(project, stash_args).Wait() != 0:
+            return -1
 
       if GitCommand(project, args).Wait() != 0:
         return -1
+
+      if needs_stash:
+        stash_args.append('pop')
+        stash_args.append('--quiet')
+        if GitCommand(project, stash_args).Wait() != 0:
+          return -1

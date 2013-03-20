@@ -14,7 +14,6 @@
 # limitations under the License.
 
 import os
-import sys
 from trace import Trace
 
 HEAD    = 'HEAD'
@@ -116,10 +115,10 @@ class GitRefs(object):
 
         line = line[:-1]
         p = line.split(' ')
-        id = p[0]
+        ref_id = p[0]
         name = p[1]
 
-        self._phyref[name] = id
+        self._phyref[name] = ref_id
     finally:
       fd.close()
     self._mtime['packed-refs'] = mtime
@@ -139,22 +138,24 @@ class GitRefs(object):
   def _ReadLoose1(self, path, name):
     try:
       fd = open(path, 'rb')
-      mtime = os.path.getmtime(path)
-    except OSError:
-      return
     except IOError:
       return
+
     try:
-      id = fd.readline()
+      try:
+        mtime = os.path.getmtime(path)
+        ref_id = fd.readline()
+      except (IOError, OSError):
+        return
     finally:
       fd.close()
 
-    if not id:
+    if not ref_id:
       return
-    id = id[:-1]
+    ref_id = ref_id[:-1]
 
-    if id.startswith('ref: '):
-      self._symref[name] = id[5:]
+    if ref_id.startswith('ref: '):
+      self._symref[name] = ref_id[5:]
     else:
-      self._phyref[name] = id
+      self._phyref[name] = ref_id
     self._mtime[name] = mtime
