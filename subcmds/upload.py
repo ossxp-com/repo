@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import print_function
 import copy
 import re
 import sys
@@ -26,28 +27,30 @@ UNUSUAL_COMMIT_THRESHOLD = 5
 
 def _ConfirmManyUploads(multiple_branches=False):
   if multiple_branches:
-    print "ATTENTION: One or more branches has an unusually high number of commits."
+    print('ATTENTION: One or more branches has an unusually high number'
+          'of commits.')
   else:
-    print "ATTENTION: You are uploading an unusually high number of commits."
-  print "YOU PROBABLY DO NOT MEAN TO DO THIS. (Did you rebase across branches?)"
+    print('ATTENTION: You are uploading an unusually high number of commits.')
+  print('YOU PROBABLY DO NOT MEAN TO DO THIS. (Did you rebase across'
+        'branches?)')
   answer = raw_input("If you are sure you intend to do this, type 'yes': ").strip()
   return answer == "yes"
 
 def _die(fmt, *args):
   msg = fmt % args
-  print >>sys.stderr, 'error: %s' % msg
+  print('error: %s' % msg, file=sys.stderr)
   sys.exit(1)
 
 def _SplitEmails(values):
   result = []
-  for str in values:
-    result.extend([s.strip() for s in str.split(',')])
+  for value in values:
+    result.extend([s.strip() for s in value.split(',')])
   return result
 
 class Upload(InteractiveCommand):
   common = True
   helpSummary = "Upload changes for code review"
-  helpUsage="""
+  helpUsage = """
 %prog [--re --cc] [<project>]...
 """
   helpDescription = """
@@ -73,7 +76,7 @@ Configuration
 
 review.URL.autoupload:
 
-To disable the "Upload ... (y/n)?" prompt, you can set a per-project
+To disable the "Upload ... (y/N)?" prompt, you can set a per-project
 or global Git configuration option.  If review.URL.autoupload is set
 to "true" then repo will assume you always answer "y" at the prompt,
 and will not prompt you further.  If it is set to "false" then repo
@@ -103,6 +106,14 @@ or in the .git/config within the project.  For example:
     autoupload = true
     autocopy = johndoe@company.com,my-team-alias@company.com
 
+review.URL.uploadtopic:
+
+To add a topic branch whenever uploading a commit, you can set a
+per-project or global Git option to do so. If review.URL.uploadtopic
+is set to "true" then repo will assume you always want the equivalent
+of the -t option to the repo command. If unset or set to "false" then
+repo will make use of only the command line option.
+
 References
 ----------
 
@@ -123,6 +134,12 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
     p.add_option('--br',
                  type='string',  action='store', dest='branch',
                  help='Branch to upload.')
+    p.add_option('--cbr', '--current-branch',
+                 dest='current_branch', action='store_true',
+                 help='Upload current git branch.')
+    p.add_option('-d', '--draft',
+                 action='store_true', dest='draft', default=False,
+                 help='If specified, upload as a draft.')
 
     # Options relating to upload hook.  Note that verify and no-verify are NOT
     # opposites of each other, which is why they store to different locations.
@@ -160,20 +177,20 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
 
     if answer is None:
       date = branch.date
-      list = branch.commits
+      commit_list = branch.commits
 
-      print 'Upload project %s/:' % project.relpath
-      print '  branch %s (%2d commit%s, %s):' % (
+      print('Upload project %s/ to remote branch %s:' % (project.relpath, project.revisionExpr))
+      print('  branch %s (%2d commit%s, %s):' % (
                     name,
-                    len(list),
-                    len(list) != 1 and 's' or '',
-                    date)
-      for commit in list:
-        print '         %s' % commit
+                    len(commit_list),
+                    len(commit_list) != 1 and 's' or '',
+                    date))
+      for commit in commit_list:
+        print('         %s' % commit)
 
-      sys.stdout.write('to %s (y/n)? ' % remote.review)
-      answer = sys.stdin.readline().strip()
-      answer = answer in ('y', 'Y', 'yes', '1', 'true', 't')
+      sys.stdout.write('to %s (y/N)? ' % remote.review)
+      answer = sys.stdin.readline().strip().lower()
+      answer = answer in ('y', 'yes', '1', 'true', 't')
 
     if answer:
       if len(branch.commits) > UNUSUAL_COMMIT_THRESHOLD:
@@ -198,22 +215,28 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
       for branch in avail:
         name = branch.name
         date = branch.date
-        list = branch.commits
+        commit_list = branch.commits
 
         if b:
           script.append('#')
-        script.append('#  branch %s (%2d commit%s, %s):' % (
+        script.append('#  branch %s (%2d commit%s, %s) to remote branch %s:' % (
                       name,
-                      len(list),
-                      len(list) != 1 and 's' or '',
-                      date))
-        for commit in list:
+                      len(commit_list),
+                      len(commit_list) != 1 and 's' or '',
+                      date,
+                      project.revisionExpr))
+        for commit in commit_list:
           script.append('#         %s' % commit)
         b[name] = branch
 
       projects[project.relpath] = project
       branches[project.name] = b
     script.append('')
+
+    script = [ x.encode('utf-8')
+             if issubclass(type(x), unicode)
+             else x
+             for x in script ]
 
     script = Editor.EditString("\n".join(script)).split("\n")
 
@@ -277,7 +300,7 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
     try:
       # refs/changes/XYZ/N --> XYZ
       return refs.get(last_pub).split('/')[-2]
-    except:
+    except (AttributeError, IndexError):
       return ""
 
   def _UploadAndReport(self, opt, todo, original_people):
@@ -289,28 +312,33 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
 
         # Check if there are local changes that may have been forgotten
         if branch.project.HasChanges():
-            key = 'review.%s.autoupload' % branch.project.remote.review
-            answer = branch.project.config.GetBoolean(key)
+          key = 'review.%s.autoupload' % branch.project.remote.review
+          answer = branch.project.config.GetBoolean(key)
 
-            # if they want to auto upload, let's not ask because it could be automated
-            if answer is None:
-                sys.stdout.write('Uncommitted changes in ' + branch.project.name + ' (did you forget to amend?). Continue uploading? (y/n) ')
-                a = sys.stdin.readline().strip().lower()
-                if a not in ('y', 'yes', 't', 'true', 'on'):
-                    print >>sys.stderr, "skipping upload"
-                    branch.uploaded = False
-                    branch.error = 'User aborted'
-                    continue
+          # if they want to auto upload, let's not ask because it could be automated
+          if answer is None:
+            sys.stdout.write('Uncommitted changes in ' + branch.project.name + ' (did you forget to amend?). Continue uploading? (y/N) ')
+            a = sys.stdin.readline().strip().lower()
+            if a not in ('y', 'yes', 't', 'true', 'on'):
+              print("skipping upload", file=sys.stderr)
+              branch.uploaded = False
+              branch.error = 'User aborted'
+              continue
 
-        branch.UploadForReview(people, auto_topic=opt.auto_topic)
+        # Check if topic branches should be sent to the server during upload
+        if opt.auto_topic is not True:
+          key = 'review.%s.uploadtopic' % branch.project.remote.review
+          opt.auto_topic = branch.project.config.GetBoolean(key)
+
+        branch.UploadForReview(people, auto_topic=opt.auto_topic, draft=opt.draft)
         branch.uploaded = True
-      except UploadError, e:
+      except UploadError as e:
         branch.error = e
         branch.uploaded = False
         have_errors = True
 
-    print >>sys.stderr, ''
-    print >>sys.stderr, '----------------------------------------------------------------------'
+    print(file=sys.stderr)
+    print('----------------------------------------------------------------------', file=sys.stderr)
 
     if have_errors:
       for branch in todo:
@@ -319,17 +347,19 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
             fmt = ' (%s)'
           else:
             fmt = '\n       (%s)'
-          print >>sys.stderr, ('[FAILED] %-15s %-15s' + fmt) % (
+          print(('[FAILED] %-15s %-15s' + fmt) % (
                  branch.project.relpath + '/', \
                  branch.name, \
-                 str(branch.error))
-      print >>sys.stderr, ''
+                 str(branch.error)),
+                 file=sys.stderr)
+      print()
 
     for branch in todo:
-        if branch.uploaded:
-          print >>sys.stderr, '[OK    ] %-15s %s' % (
-                 branch.project.relpath + '/',
-                 branch.name)
+      if branch.uploaded:
+        print('[OK    ] %-15s %s' % (
+               branch.project.relpath + '/',
+               branch.name),
+               file=sys.stderr)
 
     if have_errors:
       sys.exit(1)
@@ -345,7 +375,11 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
       branch = opt.branch
 
     for project in project_list:
-      avail = project.GetUploadableBranches(branch)
+      if opt.current_branch:
+        cbr = project.CurrentBranch
+        avail = [project.GetUploadableBranch(cbr)] if cbr else None
+      else:
+        avail = project.GetUploadableBranches(branch)
       if avail:
         pending.append((project, avail))
 
@@ -355,18 +389,18 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
       pending_proj_names = [project.name for (project, avail) in pending]
       try:
         hook.Run(opt.allow_all_hooks, project_list=pending_proj_names)
-      except HookError, e:
-        print >>sys.stderr, "ERROR: %s" % str(e)
+      except HookError as e:
+        print("ERROR: %s" % str(e), file=sys.stderr)
         return
 
     if opt.reviewers:
       reviewers = _SplitEmails(opt.reviewers)
     if opt.cc:
       cc = _SplitEmails(opt.cc)
-    people = (reviewers,cc)
+    people = (reviewers, cc)
 
     if not pending:
-      print >>sys.stdout, "no branches ready for upload"
+      print("no branches ready for upload", file=sys.stderr)
     elif len(pending) == 1 and len(pending[0][1]) == 1:
       self._SingleBranch(opt, pending[0][1][0], people)
     else:

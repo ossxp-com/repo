@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import print_function
 import sys
 from command import Command
 from progress import Progress
@@ -39,10 +40,10 @@ The command is equivalent to:
     nb = args[0]
     err = []
     success = []
-    all = self.GetProjects(args[1:])
+    all_projects = self.GetProjects(args[1:])
 
-    pm = Progress('Checkout %s' % nb, len(all))
-    for project in all:
+    pm = Progress('Checkout %s' % nb, len(all_projects))
+    for project in all_projects:
       pm.update()
 
       status = project.CheckoutBranch(nb)
@@ -55,10 +56,9 @@ The command is equivalent to:
 
     if err:
       for p in err:
-        print >>sys.stderr,\
-          "error: %s/: cannot checkout %s" \
-          % (p.relpath, nb)
+        print("error: %s/: cannot checkout %s" % (p.relpath, nb),
+              file=sys.stderr)
       sys.exit(1)
     elif not success:
-      print >>sys.stderr, 'error: no project has branch %s' % nb
+      print('error: no project has branch %s' % nb, file=sys.stderr)
       sys.exit(1)

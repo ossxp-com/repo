@@ -21,10 +21,15 @@ class ManifestInvalidRevisionError(Exception):
   """The revision value in a project is incorrect.
   """
 
+class NoManifestException(Exception):
+  """The required manifest does not exist.
+  """
+
 class EditorError(Exception):
   """Unspecified error from the user's text editor.
   """
   def __init__(self, reason):
+    super(EditorError, self).__init__()
     self.reason = reason
 
   def __str__(self):
@@ -34,24 +39,17 @@ class GitError(Exception):
   """Unspecified internal error from git.
   """
   def __init__(self, command):
+    super(GitError, self).__init__()
     self.command = command
 
   def __str__(self):
     return self.command
 
-class ImportError(Exception):
-  """An import from a non-Git format cannot be performed.
-  """
-  def __init__(self, reason):
-    self.reason = reason
-
-  def __str__(self):
-    return self.reason
-
 class UploadError(Exception):
   """A bundle upload to Gerrit did not succeed.
   """
   def __init__(self, reason):
+    super(UploadError, self).__init__()
     self.reason = reason
 
   def __str__(self):
@@ -61,6 +59,7 @@ class DownloadError(Exception):
   """Cannot download a repository.
   """
   def __init__(self, reason):
+    super(DownloadError, self).__init__()
     self.reason = reason
 
   def __str__(self):
@@ -70,6 +69,20 @@ class NoSuchProjectError(Exception):
   """A specified project does not exist in the work tree.
   """
   def __init__(self, name=None):
+    super(NoSuchProjectError, self).__init__()
+    self.name = name
+
+  def __str__(self):
+    if self.Name is None:
+      return 'in current directory'
+    return self.name
+
+
+class InvalidProjectGroupsError(Exception):
+  """A specified project is not suitable for the specified groups
+  """
+  def __init__(self, name=None):
+    super(InvalidProjectGroupsError, self).__init__()
     self.name = name
 
   def __str__(self):
@@ -82,12 +95,12 @@ class RepoChangedException(Exception):
      repo or manifest repositories.  In this special case we must
      use exec to re-execute repo with the new code and manifest.
   """
-  def __init__(self, extra_args=[]):
-    self.extra_args = extra_args
+  def __init__(self, extra_args=None):
+    super(RepoChangedException, self).__init__()
+    self.extra_args = extra_args or []
 
 class HookError(Exception):
   """Thrown if a 'repo-hook' could not be run.
 
   The common case is that the file wasn't present when we tried to run it.
   """
-  pass
