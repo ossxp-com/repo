@@ -3,7 +3,8 @@
 ## repo default configuration
 ##
 from __future__ import print_function
-REPO_URL = 'https://gerrit.googlesource.com/git-repo'
+#REPO_URL = 'https://gerrit.googlesource.com/git-repo'
+REPO_URL='git://github.com/ossxp-com/repo.git'
 REPO_REV = 'stable'
 
 # Copyright (C) 2008 Google Inc.
@@ -24,7 +25,7 @@ REPO_REV = 'stable'
 VERSION = (1, 19)
 
 # increment this if the MAINTAINER_KEYS block is modified
-KEYRING_VERSION = (1, 1)
+KEYRING_VERSION = (1, 2) # add jiangxin's gpg pubkey.
 MAINTAINER_KEYS = """
 
      Repo Maintainer <repo@android.kernel.org>
@@ -99,6 +100,38 @@ vbm5PdM91jOsDQYqRu6YOoYBnDnEhB2wL2bPh34HWwwrA+LwB8hlcAV2z1bdwyfl
 fTQeIu/yASZnsLBqr6SJEGwYBoWcyjG++k4fyw8ocOAo4uGDYbxgN7yYfNQ0OH7o
 V6pfUgqKLWa/aK7/N1ZHnPdFLD8Xt0Dmy4BPwrKC
 =O7am
+-----END PGP PUBLIC KEY BLOCK-----
+
+     Jiang Xin <worldhello.net@gmail.com>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.10 (GNU/Linux)
+
+mQGiBEWKr2IRBAD+KZhbdLe2xBWcoSD7puZpNP7pgaJuF6vHAUT4ToTzvzo9ndpO
+bmSQXSy1lBw8hUARX3ZrovZHtHL6x3MvxNo2tf4e5fzQo4Rl53chmPRm5nTflP61
+HCtlB1ogldNj2XM8NU+T4DMSd+061l7BtyugfsimWobTsGgKrEIJLjL7bwCgvN0I
+Rc9yQ1UWWtzY6gGf0NQSxf8EAIH0mLTykVnepL4IRX0xC2e+dWMRm1885T/F6TMz
+eOCXRuobKTe7ZVi3qIN4z6YO/L33+ZlR7NFH1JfnTWhvq9rVb90bK563McEiD3Av
+cbYRewDitq3h5jreG3y2KW8nMsqbSQTMeMLQXTQaIIVd/EBUmV9goWZy+vfDOXDt
+82iRA/wK6X1q+zGXR7S4YuRO/kshxB8vkqUlrVvdHEA0pVo8VR9DTLjjBAY0VYtr
+tt+J6hcY5pyAZwoU1gD3kx4J/nSgLDUXJLQvkZYXmjYrjYrrNriHd5YjwYVzv9HK
+0m7TOdgvkfTMahDhZ6QQmjd9Wc423JtamzdLnOkg0n+RqFcN2bQkSmlhbmcgWGlu
+IDx3b3JsZGhlbGxvLm5ldEBnbWFpbC5jb20+iGkEExECACkCGwMFCRLMAwAGCwkI
+BwMCBBUCCAMEFgIDAQIeAQIXgAUCR5GQBQIZAQAKCRAEq3G4+8SdAcPMAJ9F8xlU
+RW+w/SztBRkDm48ADiJluACgiJrdkicSz/9muR6S/BxeVEZeDMW5Ag0ERYqvZhAI
+AI5Gq/bIxlelv1IXuhO8I4x8m4QeyXK98FlkEl/ak8huioDdVsuNyWCFiCZDppa/
+65sTcS/wAh4IT7bOa8EPEuMM++SHG7m4wraTufid4SkUCfZ/vVihLBNmJm5rjxWv
+G+wmRW9ByOV5Z4v6U2Q4rdumfljEKrYprHFI87aB75TJoWnJEI09xom4Ccajf72B
+5Bv1Tm2l9jb+lbcvMMPis8X8l5BxQmrYiSzGAxYyM/pbUlW8kf25Aw/44E4SMi2T
+GDkuvK6giMTTbNvbXl7SDiCrZLJn5V5BY1N8O/weq2HAzusjKv0DCbvI6EFUYMpZ
+FYYIvzSoVSUpEO/l8HvBNGMAAwYH/jmnPXrILmWC1fiYV2liZvZZIPQ/n+z/zkak
+a0nVLqMgZyWR2ADvfeKeIo1u5pSIOzPmWnf2lXZDrtVv/HkRLtYmg0ykJWDV2si/
+8xd6bjMRGmzrQ55XcN0RpMB4o/3YC+vPba7rtjpmWxl84IJmyj4Ee2wd7SqQIAGT
+6X65yQXQgMVwEoqaHmL+L4kHcXzArNO7EsSvfYWPSNGSHckGXpejw30oUjzPVNeI
+HWkUzS03+kdGS9hW8Z3bZrO7kl/b6g+Y/hVQR26J6BLv511UFKzgb1bJpx9gppXV
+xHnL/jMIEChJXgiMfOACwQcXdDC2e5u4paQVV9chYpJ5fcUXclCITwQYEQIADwUC
+RYqvZgIbDAUJEswDAAAKCRAEq3G4+8SdAWqwAJ95wxCrEgVV7mPdvGH9ERvrS9Wn
+ogCgkTn+Qxc382IX52MDoRNT+rQWIf8=
+=eHXa
 -----END PGP PUBLIC KEY BLOCK-----
 """
 
