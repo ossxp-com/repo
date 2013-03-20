@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import print_function
 import sys
 from color import Coloring
 from command import Command
@@ -93,21 +94,21 @@ is shown, then the branch appears in all projects.
   def Execute(self, opt, args):
     projects = self.GetProjects(args)
     out = BranchColoring(self.manifest.manifestProject.config)
-    all = {}
+    all_branches = {}
     project_cnt = len(projects)
 
     for project in projects:
       for name, b in project.GetBranches().iteritems():
         b.project = project
-        if name not in all:
-          all[name] = BranchInfo(name)
-        all[name].add(b)
+        if name not in all_branches:
+          all_branches[name] = BranchInfo(name)
+        all_branches[name].add(b)
 
-    names = all.keys()
+    names = all_branches.keys()
     names.sort()
 
     if not names:
-      print >>sys.stderr, '   (no branches)'
+      print('   (no branches)', file=sys.stderr)
       return
 
     width = 25
@@ -116,7 +117,7 @@ is shown, then the branch appears in all projects.
         width = len(name)
 
     for name in names:
-      i = all[name]
+      i = all_branches[name]
       in_cnt = len(i.projects)
 
       if i.IsCurrent:
@@ -140,12 +141,12 @@ is shown, then the branch appears in all projects.
         fmt = out.write
         paths = []
         if in_cnt < project_cnt - in_cnt: 
-          type = 'in'
+          in_type = 'in'
           for b in i.projects:
             paths.append(b.project.relpath)
         else:
           fmt = out.notinproject
-          type = 'not in'
+          in_type = 'not in'
           have = set()
           for b in i.projects:
             have.add(b.project)
@@ -153,11 +154,11 @@ is shown, then the branch appears in all projects.
             if not p in have:
               paths.append(p.relpath)
 
-        s = ' %s %s' % (type, ', '.join(paths))
+        s = ' %s %s' % (in_type, ', '.join(paths))
         if width + 7 + len(s) < 80:
           fmt(s)
         else:
-          fmt(' %s:' % type)
+          fmt(' %s:' % in_type)
           for p in paths:
             out.nl()
             fmt(width*' ' + '          %s' % p)

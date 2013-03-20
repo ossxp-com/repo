@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2008 The Android Open Source Project
+# Copyright (C) 2012 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,17 +17,36 @@ from __future__ import print_function
 from color import Coloring
 from command import PagedCommand
 
-class Prune(PagedCommand):
+
+class Overview(PagedCommand):
   common = True
-  helpSummary = "Prune (delete) already merged topics"
+  helpSummary = "Display overview of unmerged project branches"
   helpUsage = """
-%prog [<project>...]
+%prog [--current-branch] [<project>...]
 """
+  helpDescription = """
+The '%prog' command is used to display an overview of the projects branches,
+and list any local commits that have not yet been merged into the project.
+
+The -b/--current-branch option can be used to restrict the output to only
+branches currently checked out in each project.  By default, all branches
+are displayed.
+"""
+
+  def _Options(self, p):
+    p.add_option('-b', '--current-branch',
+                 dest="current_branch", action="store_true",
+                 help="Consider only checked out branches")
 
   def Execute(self, opt, args):
     all_branches = []
     for project in self.GetProjects(args):
-      all_branches.extend(project.PruneHeads())
+      br = [project.GetUploadableBranch(x)
+            for x in project.GetBranches().keys()]
+      br = [x for x in br if x]
+      if opt.current_branch:
+        br = [x for x in br if x.name == project.CurrentBranch]
+      all_branches.extend(br)
 
     if not all_branches:
       return
@@ -36,9 +55,12 @@ class Prune(PagedCommand):
       def __init__(self, config):
         Coloring.__init__(self, config, 'status')
         self.project = self.printer('header', attr='bold')
+        self.text = self.printer('text')
 
     out = Report(all_branches[0].project.config)
-    out.project('Pending Branches')
+    out.text("Deprecated. See repo info -o.")
+    out.nl()
+    out.project('Projects Overview')
     out.nl()
 
     project = None
@@ -58,3 +80,5 @@ class Prune(PagedCommand):
             len(commits),
             len(commits) != 1 and 's' or ' ',
             date))
+      for commit in commits:
+        print('%-35s   - %s' % ('', commit))

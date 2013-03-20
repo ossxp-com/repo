@@ -13,18 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import print_function
+import itertools
 import os
 import re
 import sys
 import urlparse
 import xml.dom.minidom
 
-from git_config import GitConfig, IsId
-from project import RemoteSpec, Project, MetaProject, R_HEADS, HEAD
+from git_config import GitConfig
+from git_refs import R_HEADS, HEAD
+from project import RemoteSpec, Project, MetaProject
 from error import ManifestParseError
 
 MANIFEST_FILE_NAME = 'manifest.xml'
 LOCAL_MANIFEST_NAME = 'local_manifest.xml'
+LOCAL_MANIFESTS_DIR_NAME = 'local_manifests'
 
 urlparse.uses_relative.extend(['ssh', 'git'])
 urlparse.uses_netloc.extend(['ssh', 'git'])
@@ -35,10 +39,13 @@ class _Default(object):
   revisionExpr = None
   remote = None
   sync_j = 1
+  sync_c = False
+  sync_s = False
 
 class _XmlRemote(object):
   def __init__(self,
                name,
+               alias=None,
                fetch=None,
                manifestUrl=None,
                review=None,
@@ -46,19 +53,33 @@ class _XmlRemote(object):
     self.name = name
     self.fetchUrl = fetch
     self.manifestUrl = manifestUrl
+    self.remoteAlias = alias
     self.reviewUrl = review
     self.resolvedFetchUrl = self._resolveFetchUrl()
     self.autodotgit = autodotgit
 
+  def __eq__(self, other):
+    return self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return self.__dict__ != other.__dict__
+
   def _resolveFetchUrl(self):
     url = self.fetchUrl.rstrip('/')
     manifestUrl = self.manifestUrl.rstrip('/')
+    p = manifestUrl.startswith('persistent-http')
+    if p:
+      manifestUrl = manifestUrl[len('persistent-'):]
+
     # urljoin will get confused if there is no scheme in the base url
     # ie, if manifestUrl is of the form <hostname:port>
     if manifestUrl.find(':') != manifestUrl.find('/') - 1:
-        manifestUrl = 'gopher://' + manifestUrl
+      manifestUrl = 'gopher://' + manifestUrl
     url = urlparse.urljoin(manifestUrl, url)
-    return re.sub(r'^gopher://', '', url)
+    url = re.sub(r'^gopher://', '', url)
+    if p:
+      url = 'persistent-' + url
+    return url
 
   def ToRemoteSpec(self, projectName):
     url = self.resolvedFetchUrl.rstrip('/') + '/' + projectName
@@ -67,7 +88,10 @@ class _XmlRemote(object):
     # in git.sourceforge.net.
     if self.autodotgit is None or self.autodotgit:
       url += '.git'
-    return RemoteSpec(self.name, url, self.reviewUrl)
+    remoteName = self.name
+    if self.remoteAlias:
+      remoteName = self.remoteAlias
+    return RemoteSpec(remoteName, url, self.reviewUrl)
 
 class XmlManifest(object):
   """manages the repo configuration file"""
@@ -109,11 +133,11 @@ class XmlManifest(object):
     self.Override(name)
 
     try:
-      if os.path.exists(self.manifestFile):
+      if os.path.lexists(self.manifestFile):
         os.remove(self.manifestFile)
       os.symlink('manifests/%s' % name, self.manifestFile)
-    except OSError, e:
-      raise ManifestParseError('cannot link manifest %s' % name)
+    except OSError as e:
+      raise ManifestParseError('cannot link manifest %s: %s' % (name, str(e)))
 
   def _RemoteToXml(self, r, doc, root):
     e = doc.createElement('remote')
@@ -123,9 +147,15 @@ class XmlManifest(object):
     if r.reviewUrl is not None:
       e.setAttribute('review', r.reviewUrl)
 
-  def Save(self, fd, peg_rev=False):
+  def Save(self, fd, peg_rev=False, peg_rev_upstream=True):
     """Write the current manifest out to the given file descriptor.
     """
+    mp = self.manifestProject
+
+    groups = mp.config.GetString('manifest.groups')
+    if groups:
+      groups = [x for x in re.split(r'[,\s]+', groups) if x]
+
     doc = xml.dom.minidom.Document()
     root = doc.createElement('manifest')
     doc.appendChild(root)
@@ -159,6 +189,12 @@ class XmlManifest(object):
     if d.sync_j > 1:
       have_default = True
       e.setAttribute('sync-j', '%d' % d.sync_j)
+    if d.sync_c:
+      have_default = True
+      e.setAttribute('sync-c', 'true')
+    if d.sync_s:
+      have_default = True
+      e.setAttribute('sync-s', 'true')
     if have_default:
       root.appendChild(e)
       root.appendChild(doc.createTextNode(''))
@@ -169,25 +205,38 @@ class XmlManifest(object):
       root.appendChild(e)
       root.appendChild(doc.createTextNode(''))
 
-    sort_projects = list(self.projects.keys())
-    sort_projects.sort()
+    def output_projects(parent, parent_node, projects):
+      for p in projects:
+        output_project(parent, parent_node, self.projects[p])
 
-    for p in sort_projects:
-      p = self.projects[p]
+    def output_project(parent, parent_node, p):
+      if not p.MatchesGroups(groups):
+        return
+
+      name = p.name
+      relpath = p.relpath
+      if parent:
+        name = self._UnjoinName(parent.name, name)
+        relpath = self._UnjoinRelpath(parent.relpath, relpath)
+
       e = doc.createElement('project')
-      root.appendChild(e)
-      e.setAttribute('name', p.name)
-      if p.relpath != p.name:
-        e.setAttribute('path', p.relpath)
+      parent_node.appendChild(e)
+      e.setAttribute('name', name)
+      if relpath != name:
+        e.setAttribute('path', relpath)
       if not d.remote or p.remote.name != d.remote.name:
         e.setAttribute('remote', p.remote.name)
       if peg_rev:
         if self.IsMirror:
-          e.setAttribute('revision',
-                         p.bare_git.rev_parse(p.revisionExpr + '^0'))
+          value = p.bare_git.rev_parse(p.revisionExpr + '^0')
         else:
-          e.setAttribute('revision',
-                         p.work_git.rev_parse(HEAD + '^0'))
+          value = p.work_git.rev_parse(HEAD + '^0')
+        e.setAttribute('revision', value)
+        if peg_rev_upstream and value != p.revisionExpr:
+          # Only save the origin if the origin is not a sha1, and the default
+          # isn't our value, and the if the default doesn't already have that
+          # covered.
+          e.setAttribute('upstream', p.revisionExpr)
       elif not d.revisionExpr or p.revisionExpr != d.revisionExpr:
         e.setAttribute('revision', p.revisionExpr)
 
@@ -196,6 +245,34 @@ class XmlManifest(object):
         ce.setAttribute('src', c.src)
         ce.setAttribute('dest', c.dest)
         e.appendChild(ce)
+
+      default_groups = ['all', 'name:%s' % p.name, 'path:%s' % p.relpath]
+      egroups = [g for g in p.groups if g not in default_groups]
+      if egroups:
+        e.setAttribute('groups', ','.join(egroups))
+
+      for a in p.annotations:
+        if a.keep == "true":
+          ae = doc.createElement('annotation')
+          ae.setAttribute('name', a.name)
+          ae.setAttribute('value', a.value)
+          e.appendChild(ae)
+
+      if p.sync_c:
+        e.setAttribute('sync-c', 'true')
+
+      if p.sync_s:
+        e.setAttribute('sync-s', 'true')
+
+      if p.subprojects:
+        sort_projects = [subp.name for subp in p.subprojects]
+        sort_projects.sort()
+        output_projects(p, e, sort_projects)
+
+    sort_projects = [key for key in self.projects.keys()
+                     if not self.projects[key].parent]
+    sort_projects.sort()
+    output_projects(None, root, sort_projects)
 
     if self._repo_hooks_project:
       root.appendChild(doc.createTextNode(''))
@@ -259,16 +336,33 @@ class XmlManifest(object):
         b = b[len(R_HEADS):]
       self.branch = b
 
-      self._ParseManifest(True)
+      nodes = []
+      nodes.append(self._ParseManifestXml(self.manifestFile,
+                                          self.manifestProject.worktree))
 
       local = os.path.join(self.repodir, LOCAL_MANIFEST_NAME)
       if os.path.exists(local):
-        try:
-          real = self.manifestFile
-          self.manifestFile = local
-          self._ParseManifest(False)
-        finally:
-          self.manifestFile = real
+        print('warning: %s is deprecated; put local manifests in `%s` instead'
+              % (LOCAL_MANIFEST_NAME, os.path.join(self.repodir, LOCAL_MANIFESTS_DIR_NAME)),
+              file=sys.stderr)
+        nodes.append(self._ParseManifestXml(local, self.repodir))
+
+      local_dir = os.path.abspath(os.path.join(self.repodir, LOCAL_MANIFESTS_DIR_NAME))
+      try:
+        for local_file in sorted(os.listdir(local_dir)):
+          if local_file.endswith('.xml'):
+            local = os.path.join(local_dir, local_file)
+            nodes.append(self._ParseManifestXml(local, self.repodir))
+      except OSError:
+        pass
+
+      try:
+        self._ParseManifest(nodes)
+      except ManifestParseError as e:
+        # There was a problem parsing, unload ourselves in case they catch
+        # this error and try again later, we will show the correct error
+        self._Unload()
+        raise e
 
       if self.IsMirror:
         self._AddMetaProjectMirror(self.repoProject)
@@ -276,44 +370,58 @@ class XmlManifest(object):
 
       self._loaded = True
 
-  def _ParseManifest(self, is_root_file):
-    root = xml.dom.minidom.parse(self.manifestFile)
+  def _ParseManifestXml(self, path, include_root):
+    try:
+      root = xml.dom.minidom.parse(path)
+    except (OSError, xml.parsers.expat.ExpatError) as e:
+      raise ManifestParseError("error parsing manifest %s: %s" % (path, e))
+
     if not root or not root.childNodes:
-      raise ManifestParseError(
-          "no root node in %s" %
-          self.manifestFile)
+      raise ManifestParseError("no root node in %s" % (path,))
 
-    config = root.childNodes[0]
-    if config.nodeName != 'manifest':
-      raise ManifestParseError(
-          "no <manifest> in %s" %
-          self.manifestFile)
+    for manifest in root.childNodes:
+      if manifest.nodeName == 'manifest':
+        break
+    else:
+      raise ManifestParseError("no <manifest> in %s" % (path,))
 
-    for node in config.childNodes:
-      if node.nodeName == 'remove-project':
+    nodes = []
+    for node in manifest.childNodes:  # pylint:disable=W0631
+                                      # We only get here if manifest is initialised
+      if node.nodeName == 'include':
         name = self._reqatt(node, 'name')
+        fp = os.path.join(include_root, name)
+        if not os.path.isfile(fp):
+          raise ManifestParseError, \
+              "include %s doesn't exist or isn't a file" % \
+              (name,)
         try:
-          del self._projects[name]
-        except KeyError:
+          nodes.extend(self._ParseManifestXml(fp, include_root))
+        # should isolate this to the exact exception, but that's
+        # tricky.  actual parsing implementation may vary.
+        except (KeyboardInterrupt, RuntimeError, SystemExit):
+          raise
+        except Exception as e:
           raise ManifestParseError(
-              'project %s not found' %
-              (name))
+              "failed parsing included manifest %s: %s", (name, e))
+      else:
+        nodes.append(node)
+    return nodes
 
-        # If the manifest removes the hooks project, treat it as if it deleted
-        # the repo-hooks element too.
-        if self._repo_hooks_project and (self._repo_hooks_project.name == name):
-          self._repo_hooks_project = None
-
-    for node in config.childNodes:
+  def _ParseManifest(self, node_list):
+    for node in itertools.chain(*node_list):
       if node.nodeName == 'remote':
         remote = self._ParseRemote(node)
-        if self._remotes.get(remote.name):
-          raise ManifestParseError(
-              'duplicate remote %s in %s' %
-              (remote.name, self.manifestFile))
-        self._remotes[remote.name] = remote
+        if remote:
+          if remote.name in self._remotes:
+            if remote != self._remotes[remote.name]:
+              raise ManifestParseError(
+                  'remote %s already exists with different attributes' %
+                  (remote.name))
+          else:
+            self._remotes[remote.name] = remote
 
-    for node in config.childNodes:
+    for node in itertools.chain(*node_list):
       if node.nodeName == 'default':
         if self._default is not None:
           raise ManifestParseError(
@@ -323,7 +431,7 @@ class XmlManifest(object):
     if self._default is None:
       self._default = _Default()
 
-    for node in config.childNodes:
+    for node in itertools.chain(*node_list):
       if node.nodeName == 'notice':
         if self._notice is not None:
           raise ManifestParseError(
@@ -331,25 +439,28 @@ class XmlManifest(object):
               (self.manifestFile))
         self._notice = self._ParseNotice(node)
 
-    for node in config.childNodes:
+    for node in itertools.chain(*node_list):
       if node.nodeName == 'manifest-server':
         url = self._reqatt(node, 'url')
         if self._manifest_server is not None:
-            raise ManifestParseError(
-                'duplicate manifest-server in %s' %
-                (self.manifestFile))
+          raise ManifestParseError(
+              'duplicate manifest-server in %s' %
+              (self.manifestFile))
         self._manifest_server = url
 
-    for node in config.childNodes:
+    def recursively_add_projects(project):
+      if self._projects.get(project.name):
+        raise ManifestParseError(
+            'duplicate project %s in %s' %
+            (project.name, self.manifestFile))
+      self._projects[project.name] = project
+      for subproject in project.subprojects:
+        recursively_add_projects(subproject)
+
+    for node in itertools.chain(*node_list):
       if node.nodeName == 'project':
         project = self._ParseProject(node)
-        if self._projects.get(project.name):
-          raise ManifestParseError(
-              'duplicate project %s in %s' %
-              (project.name, self.manifestFile))
-        self._projects[project.name] = project
-
-    for node in config.childNodes:
+        recursively_add_projects(project)
       if node.nodeName == 'repo-hooks':
         # Get the name of the project and the (space-separated) list of enabled.
         repo_hooks_project = self._reqatt(node, 'in-project')
@@ -371,6 +482,19 @@ class XmlManifest(object):
 
         # Store the enabled hooks in the Project object.
         self._repo_hooks_project.enabled_repo_hooks = enabled_repo_hooks
+      if node.nodeName == 'remove-project':
+        name = self._reqatt(node, 'name')
+        try:
+          del self._projects[name]
+        except KeyError:
+          raise ManifestParseError('remove-project element specifies non-existent '
+                                   'project: %s' % name)
+
+        # If the manifest removes the hooks project, treat it as if it deleted
+        # the repo-hooks element too.
+        if self._repo_hooks_project and (self._repo_hooks_project.name == name):
+          self._repo_hooks_project = None
+
 
   def _AddMetaProjectMirror(self, m):
     name = None
@@ -389,7 +513,7 @@ class XmlManifest(object):
     if name is None:
       s = m_url.rindex('/') + 1
       manifestUrl = self.manifestProject.config.GetString('remote.origin.url')
-      remote = _XmlRemote('origin', m_url[:s], manifestUrl)
+      remote = _XmlRemote('origin', fetch=m_url[:s], manifestUrl=manifestUrl)
       name = m_url[s:]
 
     if name.endswith('.git'):
@@ -413,6 +537,9 @@ class XmlManifest(object):
     reads a <remote> element from the manifest file
     """
     name = self._reqatt(node, 'name')
+    alias = node.getAttribute('alias')
+    if alias == '':
+      alias = None
     fetch = self._reqatt(node, 'fetch')
     review = node.getAttribute('review')
     if review == '':
@@ -425,7 +552,7 @@ class XmlManifest(object):
     else:
       autodotgit = False
     manifestUrl = self.manifestProject.config.GetString('remote.origin.url')
-    return _XmlRemote(name, fetch, manifestUrl, review, autodotgit)
+    return _XmlRemote(name, alias, fetch, manifestUrl, review, autodotgit)
 
   def _ParseDefault(self, node):
     """
@@ -436,11 +563,24 @@ class XmlManifest(object):
     d.revisionExpr = node.getAttribute('revision')
     if d.revisionExpr == '':
       d.revisionExpr = None
+
     sync_j = node.getAttribute('sync-j')
     if sync_j == '' or sync_j is None:
       d.sync_j = 1
     else:
       d.sync_j = int(sync_j)
+
+    sync_c = node.getAttribute('sync-c')
+    if not sync_c:
+      d.sync_c = False
+    else:
+      d.sync_c = sync_c.lower() in ("yes", "true", "1")
+
+    sync_s = node.getAttribute('sync-s')
+    if not sync_s:
+      d.sync_s = False
+    else:
+      d.sync_s = sync_s.lower() in ("yes", "true", "1")
     return d
 
   def _ParseNotice(self, node):
@@ -482,11 +622,19 @@ class XmlManifest(object):
 
     return '\n'.join(cleanLines)
 
-  def _ParseProject(self, node):
+  def _JoinName(self, parent_name, name):
+    return os.path.join(parent_name, name)
+
+  def _UnjoinName(self, parent_name, name):
+    return os.path.relpath(name, parent_name)
+
+  def _ParseProject(self, node, parent = None):
     """
     reads a <project> element from the manifest file
     """
     name = self._reqatt(node, 'name')
+    if parent:
+      name = self._JoinName(parent.name, name)
 
     remote = self._get_remote(node)
     if remote is None:
@@ -512,28 +660,91 @@ class XmlManifest(object):
             "project %s path cannot be absolute in %s" % \
             (name, self.manifestFile)
 
-    if self.IsMirror:
-      relpath = None
-      worktree = None
-      gitdir = os.path.join(self.topdir, '%s.git' % name)
+    rebase = node.getAttribute('rebase')
+    if not rebase:
+      rebase = True
     else:
-      worktree = os.path.join(self.topdir, path).replace('\\', '/')
-      gitdir = os.path.join(self.repodir, 'projects/%s.git' % path)
+      rebase = rebase.lower() in ("yes", "true", "1")
+
+    sync_c = node.getAttribute('sync-c')
+    if not sync_c:
+      sync_c = False
+    else:
+      sync_c = sync_c.lower() in ("yes", "true", "1")
+
+    sync_s = node.getAttribute('sync-s')
+    if not sync_s:
+      sync_s = self._default.sync_s
+    else:
+      sync_s = sync_s.lower() in ("yes", "true", "1")
+
+    upstream = node.getAttribute('upstream')
+
+    groups = ''
+    if node.hasAttribute('groups'):
+      groups = node.getAttribute('groups')
+    groups = [x for x in re.split(r'[,\s]+', groups) if x]
+
+    if parent is None:
+      relpath, worktree, gitdir = self.GetProjectPaths(name, path)
+    else:
+      relpath, worktree, gitdir = self.GetSubprojectPaths(parent, path)
+
+    default_groups = ['all', 'name:%s' % name, 'path:%s' % relpath]
+    groups.extend(set(default_groups).difference(groups))
 
     project = Project(manifest = self,
                       name = name,
                       remote = remote.ToRemoteSpec(name),
                       gitdir = gitdir,
                       worktree = worktree,
-                      relpath = path,
+                      relpath = relpath,
                       revisionExpr = revisionExpr,
-                      revisionId = None)
+                      revisionId = None,
+                      rebase = rebase,
+                      groups = groups,
+                      sync_c = sync_c,
+                      sync_s = sync_s,
+                      upstream = upstream,
+                      parent = parent)
 
     for n in node.childNodes:
       if n.nodeName == 'copyfile':
         self._ParseCopyFile(project, n)
+      if n.nodeName == 'annotation':
+        self._ParseAnnotation(project, n)
+      if n.nodeName == 'project':
+        project.subprojects.append(self._ParseProject(n, parent = project))
 
     return project
+
+  def GetProjectPaths(self, name, path):
+    relpath = path
+    if self.IsMirror:
+      worktree = None
+      gitdir = os.path.join(self.topdir, '%s.git' % name)
+    else:
+      worktree = os.path.join(self.topdir, path).replace('\\', '/')
+      gitdir = os.path.join(self.repodir, 'projects', '%s.git' % path)
+    return relpath, worktree, gitdir
+
+  def GetSubprojectName(self, parent, submodule_path):
+    return os.path.join(parent.name, submodule_path)
+
+  def _JoinRelpath(self, parent_relpath, relpath):
+    return os.path.join(parent_relpath, relpath)
+
+  def _UnjoinRelpath(self, parent_relpath, relpath):
+    return os.path.relpath(relpath, parent_relpath)
+
+  def GetSubprojectPaths(self, parent, path):
+    relpath = self._JoinRelpath(parent.relpath, path)
+    gitdir = os.path.join(parent.gitdir, 'subprojects', '%s.git' % path)
+    if self.IsMirror:
+      worktree = None
+    else:
+      worktree = os.path.join(parent.worktree, path).replace('\\', '/')
+    return relpath, worktree, gitdir
 
   def _ParseCopyFile(self, project, node):
     src = self._reqatt(node, 'src')
@@ -542,6 +753,17 @@ class XmlManifest(object):
       # src is project relative;
       # dest is relative to the top of the tree
       project.AddCopyFile(src, dest, os.path.join(self.topdir, dest))
+
+  def _ParseAnnotation(self, project, node):
+    name = self._reqatt(node, 'name')
+    value = self._reqatt(node, 'value')
+    try:
+      keep = self._reqatt(node, 'keep').lower()
+    except ManifestParseError:
+      keep = "true"
+    if keep != "true" and keep != "false":
+      raise ManifestParseError, "optional \"keep\" attribute must be \"true\" or \"false\""
+    project.AddAnnotation(name, value, keep)
 
   def _get_remote(self, node):
     name = node.getAttribute('remote')
