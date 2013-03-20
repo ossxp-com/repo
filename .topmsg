@@ -1,6 +1,6 @@
 From: Jiang Xin <jiangxin@ossxp.com>
-Subject: [PATCH] t/new-hacker-gpgkey-and-url
+Subject: [PATCH] New maintainer pubkey and repo url
 
-Add Jiang Xin's pgp key to the keyring.
+New hacked repo url, and update pgp keyring.
 
 Signed-off-by: Jiang Xin <jiangxin@ossxp.com>
