@@ -1,6 +1,7 @@
 From: Jiang Xin <jiangxin@ossxp.com>
-Subject: [PATCH] t/repo-config-subcommand
+Subject: [PATCH] New subcommand: repo config
 
-New repo config subcommand, which add or set ManifestProject configuration.
+New repo config subcommand, which can add or set configurations on
+ManifestProject.
 
 Signed-off-by: Jiang Xin <jiangxin@ossxp.com>
