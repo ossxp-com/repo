@@ -5,7 +5,7 @@
 from __future__ import print_function
 #REPO_URL = 'https://gerrit.googlesource.com/git-repo'
 REPO_URL='git://github.com/ossxp-com/repo.git'
-REPO_REV = 'stable'
+REPO_REV = 'pu'
 
 # Copyright (C) 2008 Google Inc.
 #
