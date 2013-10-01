@@ -21,10 +21,16 @@ except ImportError:
   import dummy_threading as _threading
 
 import glob
+
+from pyversion import is_python3
+if is_python3():
+  import io
+else:
+  import StringIO as io
+
 import itertools
 import os
 import sys
-import StringIO
 
 from color import Coloring
 
@@ -142,7 +148,7 @@ the following meanings:
       for project in all_projects:
         sem.acquire()
 
-        class BufList(StringIO.StringIO):
+        class BufList(io.StringIO):
           def dump(self, ostream):
             for entry in self.buflist:
               ostream.write(entry)
@@ -182,7 +188,7 @@ the following meanings:
       try:
         os.chdir(self.manifest.topdir)
 
-        outstring = StringIO.StringIO()
+        outstring = io.StringIO()
         self._FindOrphans(glob.glob('.*') + \
             glob.glob('*'), \
             proj_dirs, proj_dirs_parents, outstring)

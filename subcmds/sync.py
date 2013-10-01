@@ -24,8 +24,19 @@ import socket
 import subprocess
 import sys
 import time
-import urlparse
-import xmlrpclib
+
+from pyversion import is_python3
+if is_python3():
+  import urllib.parse
+  import xmlrpc.client
+else:
+  import imp
+  import urlparse
+  import xmlrpclib
+  urllib = imp.new_module('urllib')
+  urllib.parse = urlparse
+  xmlrpc = imp.new_module('xmlrpc')
+  xmlrpc.client = xmlrpclib
 
 try:
   import threading as _threading
@@ -228,6 +239,9 @@ later is required to fix a server side protocol bug.
     # We'll set to true once we've locked the lock.
     did_lock = False
 
+    if not opt.quiet:
+      print('Fetching project %s' % project.name)
+
     # Encapsulate everything in a try/except/finally so that:
     # - We always set err_event in the case of an exception.
     # - We always make sure we call sem.release().
@@ -274,6 +288,8 @@ later is required to fix a server side protocol bug.
     if self.jobs == 1:
       for project in projects:
         pm.update()
+        if not opt.quiet:
+          print('Fetching project %s' % project.name)
         if project.Sync_NetworkHalf(
             quiet=opt.quiet,
             current_branch_only=opt.current_branch_only,
@@ -372,6 +388,13 @@ later is required to fix a server side protocol bug.
       print('\nerror: Exited sync due to gc errors', file=sys.stderr)
       sys.exit(1)
 
+  def _ReloadManifest(self, manifest_name=None):
+    if manifest_name:
+      # Override calls _Unload already
+      self.manifest.Override(manifest_name)
+    else:
+      self.manifest._Unload()
+
   def UpdateProjectList(self):
     new_project_paths = []
     for project in self.GetProjects(None, missing_ok=True):
@@ -406,7 +429,7 @@ later is required to fix a server side protocol bug.
                            groups = None)
 
             if project.IsDirty():
-              print('error: Cannot remove project "%s": uncommitted changes'
+              print('error: Cannot remove project "%s": uncommitted changes '
                     'are present' % project.relpath, file=sys.stderr)
               print('       commit changes, then run sync again',
                     file=sys.stderr)
@@ -464,9 +487,11 @@ later is required to fix a server side protocol bug.
     if opt.manifest_name:
       self.manifest.Override(opt.manifest_name)
 
+    manifest_name = opt.manifest_name
+
     if opt.smart_sync or opt.smart_tag:
       if not self.manifest.manifest_server:
-        print('error: cannot smart sync: no manifest server defined in'
+        print('error: cannot smart sync: no manifest server defined in '
               'manifest', file=sys.stderr)
         sys.exit(1)
 
@@ -486,7 +511,7 @@ later is required to fix a server side protocol bug.
                   file=sys.stderr)
           else:
             try:
-              parse_result = urlparse.urlparse(manifest_server)
+              parse_result = urllib.parse.urlparse(manifest_server)
               if parse_result.hostname:
                 username, _account, password = \
                   info.authenticators(parse_result.hostname)
@@ -504,7 +529,7 @@ later is required to fix a server side protocol bug.
                                                     1)
 
       try:
-        server = xmlrpclib.Server(manifest_server)
+        server = xmlrpc.client.Server(manifest_server)
         if opt.smart_sync:
           p = self.manifest.manifestProject
           b = p.GetBranch(p.CurrentBranch)
@@ -513,8 +538,7 @@ later is required to fix a server side protocol bug.
             branch = branch[len(R_HEADS):]
 
           env = os.environ.copy()
-          if (env.has_key('TARGET_PRODUCT') and
-              env.has_key('TARGET_BUILD_VARIANT')):
+          if 'TARGET_PRODUCT' in env and 'TARGET_BUILD_VARIANT' in env:
             target = '%s-%s' % (env['TARGET_PRODUCT'],
                                 env['TARGET_BUILD_VARIANT'])
             [success, manifest_str] = server.GetApprovedManifest(branch, target)
@@ -538,15 +562,15 @@ later is required to fix a server side protocol bug.
             print('error: cannot write manifest to %s' % manifest_path,
                   file=sys.stderr)
             sys.exit(1)
-          self.manifest.Override(manifest_name)
+          self._ReloadManifest(manifest_name)
         else:
           print('error: %s' % manifest_str, file=sys.stderr)
           sys.exit(1)
-      except (socket.error, IOError, xmlrpclib.Fault) as e:
+      except (socket.error, IOError, xmlrpc.client.Fault) as e:
         print('error: cannot connect to manifest server %s:\n%s'
               % (self.manifest.manifest_server, e), file=sys.stderr)
         sys.exit(1)
-      except xmlrpclib.ProtocolError as e:
+      except xmlrpc.client.ProtocolError as e:
         print('error: cannot connect to manifest server %s:\n%d %s'
               % (self.manifest.manifest_server, e.errcode, e.errmsg),
               file=sys.stderr)
@@ -571,7 +595,7 @@ later is required to fix a server side protocol bug.
       mp.Sync_LocalHalf(syncbuf)
       if not syncbuf.Finish():
         sys.exit(1)
-      self.manifest._Unload()
+      self._ReloadManifest(manifest_name)
       if opt.jobs is None:
         self.jobs = self.manifest.default.sync_j
     all_projects = self.GetProjects(args,
@@ -596,7 +620,7 @@ later is required to fix a server side protocol bug.
       # Iteratively fetch missing and/or nested unregistered submodules
       previously_missing_set = set()
       while True:
-        self.manifest._Unload()
+        self._ReloadManifest(manifest_name)
         all_projects = self.GetProjects(args,
                                         missing_ok=True,
                                         submodules_ok=opt.fetch_submodules)

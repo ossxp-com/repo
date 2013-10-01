@@ -136,11 +136,11 @@ class Command(object):
 
     groups = mp.config.GetString('manifest.groups')
     if not groups:
-      groups = 'all,-notdefault,platform-' + platform.system().lower()
+      groups = 'default,platform-' + platform.system().lower()
     groups = [x for x in re.split(r'[,\s]+', groups) if x]
 
     if not args:
-      all_projects_list = all_projects.values()
+      all_projects_list = list(all_projects.values())
       derived_projects = {}
       for project in all_projects_list:
         if submodules_ok or project.sync_s:
@@ -184,6 +184,17 @@ class Command(object):
     def _getpath(x):
       return x.relpath
     result.sort(key=_getpath)
+    return result
+
+  def FindProjects(self, args):
+    result = []
+    patterns = [re.compile(r'%s' % a, re.IGNORECASE) for a in args]
+    for project in self.GetProjects(''):
+      for pattern in patterns:
+        if pattern.search(project.name) or pattern.search(project.relpath):
+          result.append(project)
+          break
+    result.sort(key=lambda project: project.relpath)
     return result
 
 # pylint: disable=W0223
