@@ -36,6 +36,12 @@ from trace import IsTrace, Trace
 
 from git_refs import GitRefs, HEAD, R_HEADS, R_TAGS, R_PUB, R_M
 
+from pyversion import is_python3
+if not is_python3():
+  # pylint:disable=W0622
+  input = raw_input
+  # pylint:enable=W0622
+
 def _lwrite(path, content):
   lock = '%s.lock' % path
 
@@ -78,7 +84,7 @@ def _ProjectHooks():
   if _project_hook_list is None:
     d = os.path.abspath(os.path.dirname(__file__))
     d = os.path.join(d , 'hooks')
-    _project_hook_list = map(lambda x: os.path.join(d, x), os.listdir(d))
+    _project_hook_list = [os.path.join(d, x) for x in os.listdir(d)]
   return _project_hook_list
 
 
@@ -151,11 +157,12 @@ class ReviewableBranch(object):
       R_HEADS + self.name,
       '--')
 
-  def UploadForReview(self, people, auto_topic=False, draft=False):
+  def UploadForReview(self, people, auto_topic=False, draft=False, dest_branch=None):
     self.project.UploadForReview(self.name,
                                  people,
                                  auto_topic=auto_topic,
-                                 draft=draft)
+                                 draft=draft,
+                                 dest_branch=dest_branch)
 
   def GetPublishedRefs(self):
     refs = {}
@@ -361,7 +368,7 @@ class RepoHook(object):
                  'Do you want to allow this script to run '
                  '(yes/yes-never-ask-again/NO)? ') % (
                  self._GetMustVerb(), self._script_fullpath)
-      response = raw_input(prompt).lower()
+      response = input(prompt).lower()
       print()
 
       # User is doing a one-time approval.
@@ -488,9 +495,11 @@ class Project(object):
                groups = None,
                sync_c = False,
                sync_s = False,
+               clone_depth = None,
                upstream = None,
                parent = None,
-               is_derived = False):
+               is_derived = False,
+               dest_branch = None):
     """Init a Project object.
 
     Args:
@@ -510,6 +519,7 @@ class Project(object):
       parent: The parent Project object.
       is_derived: False if the project was explicitly defined in the manifest;
                   True if the project is a discovered submodule.
+      dest_branch: The branch to which to push changes for review by default.
     """
     self.manifest = manifest
     self.name = name
@@ -533,6 +543,7 @@ class Project(object):
     self.groups = groups
     self.sync_c = sync_c
     self.sync_s = sync_s
+    self.clone_depth = clone_depth
     self.upstream = upstream
     self.parent = parent
     self.is_derived = is_derived
@@ -551,6 +562,7 @@ class Project(object):
       self.work_git = None
     self.bare_git = self._GitGetByExec(self, bare=True)
     self.bare_ref = GitRefs(gitdir)
+    self.dest_branch = dest_branch
 
     # This will be filled in if a project is later identified to be the
     # project containing repo hooks.
@@ -644,7 +656,7 @@ class Project(object):
     all_refs = self._allrefs
     heads = {}
 
-    for name, ref_id in all_refs.iteritems():
+    for name, ref_id in all_refs.items():
       if name.startswith(R_HEADS):
         name = name[len(R_HEADS):]
         b = self.GetBranch(name)
@@ -653,7 +665,7 @@ class Project(object):
         b.revision = ref_id
         heads[name] = b
 
-    for name, ref_id in all_refs.iteritems():
+    for name, ref_id in all_refs.items():
       if name.startswith(R_PUB):
         name = name[len(R_PUB):]
         b = heads.get(name)
@@ -672,9 +684,14 @@ class Project(object):
        project_groups: "all,group1,group2"
        manifest_groups: "-group1,group2"
        the project will be matched.
+
+       The special manifest group "default" will match any project that
+       does not have the special project group "notdefault"
     """
-    expanded_manifest_groups = manifest_groups or ['all', '-notdefault']
+    expanded_manifest_groups = manifest_groups or ['default']
     expanded_project_groups = ['all'] + (self.groups or [])
+    if not 'notdefault' in expanded_project_groups:
+      expanded_project_groups += ['default']
 
     matched = False
     for group in expanded_manifest_groups:
@@ -754,10 +771,7 @@ class Project(object):
     paths.extend(df.keys())
     paths.extend(do)
 
-    paths = list(set(paths))
-    paths.sort()
-
-    for p in paths:
+    for p in sorted(set(paths)):
       try:
         i = di[p]
       except KeyError:
@@ -849,13 +863,13 @@ class Project(object):
       all_refs = self._allrefs
     heads = set()
     canrm = {}
-    for name, ref_id in all_refs.iteritems():
+    for name, ref_id in all_refs.items():
       if name.startswith(R_HEADS):
         heads.add(name)
       elif name.startswith(R_PUB):
         canrm[name] = ref_id
 
-    for name, ref_id in canrm.iteritems():
+    for name, ref_id in canrm.items():
       n = name[len(R_PUB):]
       if R_HEADS + n not in heads:
         self.bare_git.DeleteRef(name, ref_id)
@@ -866,14 +880,14 @@ class Project(object):
     heads = {}
     pubed = {}
 
-    for name, ref_id in self._allrefs.iteritems():
+    for name, ref_id in self._allrefs.items():
       if name.startswith(R_HEADS):
         heads[name[len(R_HEADS):]] = ref_id
       elif name.startswith(R_PUB):
         pubed[name[len(R_PUB):]] = ref_id
 
     ready = []
-    for branch, ref_id in heads.iteritems():
+    for branch, ref_id in heads.items():
       if branch in pubed and pubed[branch] == ref_id:
         continue
       if selected_branch and branch != selected_branch:
@@ -898,7 +912,8 @@ class Project(object):
   def UploadForReview(self, branch=None,
                       people=([],[]),
                       auto_topic=False,
-                      draft=False):
+                      draft=False,
+                      dest_branch=None):
     """Uploads the named branch for code review.
     """
     if branch is None:
@@ -912,7 +927,10 @@ class Project(object):
     if not branch.remote.review:
       raise GitError('remote %s has no review url' % branch.remote.name)
 
-    dest_branch = branch.merge
+    if dest_branch is None:
+      dest_branch = self.dest_branch
+    if dest_branch is None:
+      dest_branch = branch.merge
     if not dest_branch.startswith(R_HEADS):
       dest_branch = R_HEADS + dest_branch
 
@@ -977,6 +995,8 @@ class Project(object):
       is_new = not self.Exists
     if is_new:
       self._InitGitDir()
+    else:
+      self._UpdateHooks()
     self._InitRemote()
 
     if is_new:
@@ -1216,7 +1236,6 @@ class Project(object):
     cmd = ['fetch', remote.name]
     cmd.append('refs/changes/%2.2d/%d/%d' \
                % (change_id % 100, change_id, patch_id))
-    cmd.extend(map(str, remote.fetch))
     if GitCommand(self, cmd, bare=True).Wait() != 0:
       return None
     return DownloadedChange(self,
@@ -1605,7 +1624,7 @@ class Project(object):
         ids = set(all_refs.values())
         tmp = set()
 
-        for r, ref_id in GitRefs(ref_dir).all.iteritems():
+        for r, ref_id in GitRefs(ref_dir).all.items():
           if r not in all_refs:
             if r.startswith(R_TAGS) or remote.WritesTo(r):
               all_refs[r] = ref_id
@@ -1620,13 +1639,10 @@ class Project(object):
           ids.add(ref_id)
           tmp.add(r)
 
-        ref_names = list(all_refs.keys())
-        ref_names.sort()
-
         tmp_packed = ''
         old_packed = ''
 
-        for r in ref_names:
+        for r in sorted(all_refs):
           line = '%s %s\n' % (all_refs[r], r)
           tmp_packed += line
           if r not in tmp:
@@ -1640,7 +1656,10 @@ class Project(object):
 
     # The --depth option only affects the initial fetch; after that we'll do
     # full fetches of changes.
-    depth = self.manifest.manifestProject.config.GetString('repo.depth')
+    if self.clone_depth:
+      depth = self.clone_depth
+    else:
+      depth = self.manifest.manifestProject.config.GetString('repo.depth')
     if depth and initial:
       cmd.append('--depth=%s' % depth)
 
@@ -1652,11 +1671,13 @@ class Project(object):
 
     if not current_branch_only:
       # Fetch whole repo
-      if no_tags:
+      # If using depth then we should not get all the tags since they may
+      # be outside of the depth.
+      if no_tags or depth:
         cmd.append('--no-tags')
       else:
         cmd.append('--tags')
-      cmd.append((u'+refs/heads/*:') + remote.ToLocal('refs/heads/*'))
+      cmd.append(str((u'+refs/heads/*:') + remote.ToLocal('refs/heads/*')))
     elif tag_name is not None:
       cmd.append('tag')
       cmd.append(tag_name)
@@ -1666,7 +1687,7 @@ class Project(object):
         branch = self.upstream
       if branch.startswith(R_HEADS):
         branch = branch[len(R_HEADS):]
-      cmd.append((u'+refs/heads/%s:' % branch) + remote.ToLocal('refs/heads/%s' % branch))
+      cmd.append(str((u'+refs/heads/%s:' % branch) + remote.ToLocal('refs/heads/%s' % branch)))
 
     ok = False
     for _i in range(2):
@@ -1700,15 +1721,14 @@ class Project(object):
     return ok
 
   def _ApplyCloneBundle(self, initial=False, quiet=False):
-    if initial and self.manifest.manifestProject.config.GetString('repo.depth'):
+    if initial and (self.manifest.manifestProject.config.GetString('repo.depth') or self.clone_depth):
       return False
 
     remote = self.GetRemote(self.remote.name)
     bundle_url = remote.url + '/clone.bundle'
     bundle_url = GitConfig.ForUser().UrlInsteadOf(bundle_url)
-    if GetSchemeFromUrl(bundle_url) in ('persistent-http', 'persistent-https'):
-      bundle_url = bundle_url[len('persistent-'):]
-    if GetSchemeFromUrl(bundle_url) not in ('http', 'https'):
+    if GetSchemeFromUrl(bundle_url) not in (
+        'http', 'https', 'persistent-http', 'persistent-https'):
       return False
 
     bundle_dst = os.path.join(self.gitdir, 'clone.bundle')
@@ -1757,9 +1777,11 @@ class Project(object):
         os.remove(tmpPath)
     if 'http_proxy' in os.environ and 'darwin' == sys.platform:
       cmd += ['--proxy', os.environ['http_proxy']]
-    cookiefile = GitConfig.ForUser().GetString('http.cookiefile')
+    cookiefile = self._GetBundleCookieFile(srcUrl)
     if cookiefile:
       cmd += ['--cookie', cookiefile]
+    if srcUrl.startswith('persistent-'):
+      srcUrl = srcUrl[len('persistent-'):]
     cmd += [srcUrl]
 
     if IsTrace():
@@ -1782,7 +1804,7 @@ class Project(object):
       return False
 
     if os.path.exists(tmpPath):
-      if curlret == 0 and os.stat(tmpPath).st_size > 16:
+      if curlret == 0 and self._IsValidBundle(tmpPath):
         os.rename(tmpPath, dstPath)
         return True
       else:
@@ -1790,6 +1812,41 @@ class Project(object):
         return False
     else:
       return False
+
+  def _IsValidBundle(self, path):
+    try:
+      with open(path) as f:
+        if f.read(16) == '# v2 git bundle\n':
+          return True
+        else:
+          print("Invalid clone.bundle file; ignoring.", file=sys.stderr)
+          return False
+    except OSError:
+      return False
+
+  def _GetBundleCookieFile(self, url):
+    if url.startswith('persistent-'):
+      try:
+        p = subprocess.Popen(
+            ['git-remote-persistent-https', '-print_config', url],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+        prefix = 'http.cookiefile='
+        for line in p.stdout:
+          line = line.strip()
+          if line.startswith(prefix):
+            return line[len(prefix):]
+        if p.wait():
+          line = iter(p.stderr).next()
+          if ' -print_config' in line:
+            pass  # Persistent proxy doesn't support -print_config.
+          else:
+            print(line + p.stderr.read(), file=sys.stderr)
+      except OSError as e:
+        if e.errno == errno.ENOENT:
+          pass  # No persistent proxy.
+        raise
+    return GitConfig.ForUser().GetString('http.cookiefile')
 
   def _Checkout(self, rev, quiet=False):
     cmd = ['checkout']
@@ -1841,16 +1898,17 @@ class Project(object):
     if GitCommand(self, cmd).Wait() != 0:
       raise GitError('%s merge %s ' % (self.name, head))
 
-  def _InitGitDir(self):
+  def _InitGitDir(self, mirror_git=None):
     if not os.path.exists(self.gitdir):
       os.makedirs(self.gitdir)
       self.bare_git.init()
 
       mp = self.manifest.manifestProject
-      ref_dir = mp.config.GetString('repo.reference')
+      ref_dir = mp.config.GetString('repo.reference') or ''
 
-      if ref_dir:
-        mirror_git = os.path.join(ref_dir, self.name + '.git')
+      if ref_dir or mirror_git:
+        if not mirror_git:
+          mirror_git = os.path.join(ref_dir, self.name + '.git')
         repo_git = os.path.join(ref_dir, '.repo', 'projects',
                                 self.relpath + '.git')
 
@@ -1867,11 +1925,21 @@ class Project(object):
           _lwrite(os.path.join(self.gitdir, 'objects/info/alternates'),
                   os.path.join(ref_dir, 'objects') + '\n')
 
+      self._UpdateHooks()
+
+      m = self.manifest.manifestProject.config
+      for key in ['user.name', 'user.email']:
+        if m.Has(key, include_defaults = False):
+          self.config.SetString(key, m.GetString(key))
       if self.manifest.IsMirror:
         self.config.SetString('core.bare', 'true')
       else:
         self.config.SetString('core.bare', None)
 
+  def _UpdateHooks(self):
+    if os.path.exists(self.gitdir):
+      # Always recreate hooks since they can have been changed
+      # since the latest update.
       hooks = self._gitdir_path('hooks')
       try:
         to_rm = os.listdir(hooks)
@@ -1880,11 +1948,6 @@ class Project(object):
       for old_hook in to_rm:
         os.remove(os.path.join(hooks, old_hook))
       self._InitHooks()
-
-      m = self.manifest.manifestProject.config
-      for key in ['user.name', 'user.email']:
-        if m.Has(key, include_defaults = False):
-          self.config.SetString(key, m.GetString(key))
 
   def _InitHooks(self):
     hooks = self._gitdir_path('hooks')
@@ -2092,6 +2155,10 @@ class Project(object):
         line = fd.read()
       finally:
         fd.close()
+      try:
+        line = line.decode()
+      except AttributeError:
+        pass
       if line.startswith('ref: '):
         return line[5:-1]
       return line[:-1]
@@ -2185,7 +2252,7 @@ class Project(object):
           if not git_require((1, 7, 2)):
             raise ValueError('cannot set config on command line for %s()'
                              % name)
-          for k, v in config.iteritems():
+          for k, v in config.items():
             cmdv.append('-c')
             cmdv.append('%s=%s' % (k, v))
         cmdv.append(name)
@@ -2201,6 +2268,10 @@ class Project(object):
                          name,
                          p.stderr))
         r = p.stdout
+        try:
+          r = r.decode()
+        except AttributeError:
+          pass
         if r.endswith('\n') and r.index('\n') == len(r) - 1:
           return r[:-1]
         return r
