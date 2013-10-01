@@ -22,13 +22,12 @@ import optparse
 import os
 import sys
 import time
-try:
-  import urllib2
-except ImportError:
-  # For python3
+
+from pyversion import is_python3
+if is_python3():
   import urllib.request
 else:
-  # For python2
+  import urllib2
   urllib = imp.new_module('urllib')
   urllib.request = urllib2
 
@@ -49,6 +48,11 @@ from manifest_xml import XmlManifest
 from pager import RunPager
 
 from subcmds import all_commands
+
+if not is_python3():
+  # pylint:disable=W0622
+  input = raw_input
+  # pylint:enable=W0622
 
 global_options = optparse.OptionParser(
                  usage="repo [-p|--paginate|--no-pager] COMMAND [ARGS]"
@@ -286,7 +290,7 @@ def _AddPasswordFromUserInput(handler, msg, req):
   if user is None:
     print(msg)
     try:
-      user = raw_input('User: ')
+      user = input('User: ')
       password = getpass.getpass()
     except KeyboardInterrupt:
       return

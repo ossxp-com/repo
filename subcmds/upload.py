@@ -23,17 +23,23 @@ from editor import Editor
 from error import HookError, UploadError
 from project import RepoHook
 
+from pyversion import is_python3
+if not is_python3():
+  # pylint:disable=W0622
+  input = raw_input
+  # pylint:enable=W0622
+
 UNUSUAL_COMMIT_THRESHOLD = 5
 
 def _ConfirmManyUploads(multiple_branches=False):
   if multiple_branches:
-    print('ATTENTION: One or more branches has an unusually high number'
+    print('ATTENTION: One or more branches has an unusually high number '
           'of commits.')
   else:
     print('ATTENTION: You are uploading an unusually high number of commits.')
-  print('YOU PROBABLY DO NOT MEAN TO DO THIS. (Did you rebase across'
+  print('YOU PROBABLY DO NOT MEAN TO DO THIS. (Did you rebase across '
         'branches?)')
-  answer = raw_input("If you are sure you intend to do this, type 'yes': ").strip()
+  answer = input("If you are sure you intend to do this, type 'yes': ").strip()
   return answer == "yes"
 
 def _die(fmt, *args):
@@ -140,6 +146,10 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
     p.add_option('-d', '--draft',
                  action='store_true', dest='draft', default=False,
                  help='If specified, upload as a draft.')
+    p.add_option('-D', '--destination', '--dest',
+                 type='string', action='store', dest='dest_branch',
+                 metavar='BRANCH',
+                 help='Submit for review on this target branch.')
 
     # Options relating to upload hook.  Note that verify and no-verify are NOT
     # opposites of each other, which is why they store to different locations.
@@ -179,7 +189,8 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
       date = branch.date
       commit_list = branch.commits
 
-      print('Upload project %s/ to remote branch %s:' % (project.relpath, project.revisionExpr))
+      destination = opt.dest_branch or project.dest_branch or project.revisionExpr
+      print('Upload project %s/ to remote branch %s:' % (project.relpath, destination))
       print('  branch %s (%2d commit%s, %s):' % (
                     name,
                     len(commit_list),
@@ -213,18 +224,21 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
 
       b = {}
       for branch in avail:
+        if branch is None:
+          continue
         name = branch.name
         date = branch.date
         commit_list = branch.commits
 
         if b:
           script.append('#')
+        destination = opt.dest_branch or project.dest_branch or project.revisionExpr
         script.append('#  branch %s (%2d commit%s, %s) to remote branch %s:' % (
                       name,
                       len(commit_list),
                       len(commit_list) != 1 and 's' or '',
                       date,
-                      project.revisionExpr))
+                      destination))
         for commit in commit_list:
           script.append('#         %s' % commit)
         b[name] = branch
@@ -330,7 +344,8 @@ Gerrit Code Review:  http://code.google.com/p/gerrit/
           key = 'review.%s.uploadtopic' % branch.project.remote.review
           opt.auto_topic = branch.project.config.GetBoolean(key)
 
-        branch.UploadForReview(people, auto_topic=opt.auto_topic, draft=opt.draft)
+        destination = opt.dest_branch or branch.project.dest_branch or branch.project.revisionExpr
+        branch.UploadForReview(people, auto_topic=opt.auto_topic, draft=opt.draft, dest_branch=destination)
         branch.uploaded = True
       except UploadError as e:
         branch.error = e

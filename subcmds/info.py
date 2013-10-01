@@ -27,7 +27,7 @@ class Info(PagedCommand):
   helpSummary = "Get info on the manifest branch, current branch or unmerged branches"
   helpUsage = "%prog [-dl] [-o [-b]] [<project>...]"
 
-  def _Options(self, p, show_smart=True):
+  def _Options(self, p):
     p.add_option('-d', '--diff',
                  dest='all', action='store_true',
                  help="show full info and commit diff including remote branches")
@@ -53,13 +53,19 @@ class Info(PagedCommand):
 
     self.opt = opt
 
-    mergeBranch = self.manifest.manifestProject.config.GetBranch("default").merge
+    manifestConfig = self.manifest.manifestProject.config
+    mergeBranch = manifestConfig.GetBranch("default").merge
+    manifestGroups = (manifestConfig.GetString('manifest.groups')
+                      or 'all,-notdefault')
 
     self.heading("Manifest branch: ")
     self.headtext(self.manifest.default.revisionExpr)
     self.out.nl()
     self.heading("Manifest merge branch: ")
     self.headtext(mergeBranch)
+    self.out.nl()
+    self.heading("Manifest groups: ")
+    self.headtext(manifestGroups)
     self.out.nl()
 
     self.printSeparator()
@@ -157,7 +163,7 @@ class Info(PagedCommand):
     all_branches = []
     for project in self.GetProjects(args):
       br = [project.GetUploadableBranch(x)
-            for x in project.GetBranches().keys()]
+            for x in project.GetBranches()]
       br = [x for x in br if x]
       if self.opt.current_branch:
         br = [x for x in br if x.name == project.CurrentBranch]

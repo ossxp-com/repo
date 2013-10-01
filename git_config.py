@@ -14,8 +14,9 @@
 # limitations under the License.
 
 from __future__ import print_function
-import cPickle
+
 import os
+import pickle
 import re
 import subprocess
 import sys
@@ -24,14 +25,13 @@ try:
 except ImportError:
   import dummy_threading as _threading
 import time
-try:
-  import urllib2
-except ImportError:
-  # For python3
+
+from pyversion import is_python3
+if is_python3():
   import urllib.request
   import urllib.error
 else:
-  # For python2
+  import urllib2
   import imp
   urllib = imp.new_module('urllib')
   urllib.request = urllib2
@@ -40,6 +40,10 @@ else:
 from signal import SIGTERM
 from error import GitError, UploadError
 from trace import Trace
+if is_python3():
+  from http.client import HTTPException
+else:
+  from httplib import HTTPException
 
 from git_command import GitCommand
 from git_command import ssh_sock
@@ -262,7 +266,7 @@ class GitConfig(object):
       Trace(': unpickle %s', self.file)
       fd = open(self._pickle, 'rb')
       try:
-        return cPickle.load(fd)
+        return pickle.load(fd)
       finally:
         fd.close()
     except EOFError:
@@ -271,7 +275,7 @@ class GitConfig(object):
     except IOError:
       os.remove(self._pickle)
       return None
-    except cPickle.PickleError:
+    except pickle.PickleError:
       os.remove(self._pickle)
       return None
 
@@ -279,13 +283,13 @@ class GitConfig(object):
     try:
       fd = open(self._pickle, 'wb')
       try:
-        cPickle.dump(cache, fd, cPickle.HIGHEST_PROTOCOL)
+        pickle.dump(cache, fd, pickle.HIGHEST_PROTOCOL)
       finally:
         fd.close()
     except IOError:
       if os.path.exists(self._pickle):
         os.remove(self._pickle)
-    except cPickle.PickleError:
+    except pickle.PickleError:
       if os.path.exists(self._pickle):
         os.remove(self._pickle)
 
@@ -537,8 +541,8 @@ class Remote(object):
     self.url = self._Get('url')
     self.review = self._Get('review')
     self.projectname = self._Get('projectname')
-    self.fetch = map(RefSpec.FromString,
-                     self._Get('fetch', all_keys=True))
+    self.fetch = list(map(RefSpec.FromString,
+                      self._Get('fetch', all_keys=True)))
     self._review_url = None
 
   def _InsteadOf(self):
@@ -608,6 +612,8 @@ class Remote(object):
           raise UploadError('%s: %s' % (self.review, str(e)))
         except urllib.error.URLError as e:
           raise UploadError('%s: %s' % (self.review, str(e)))
+        except HTTPException as e:
+          raise UploadError('%s: %s' % (self.review, e.__class__.__name__))
 
         REVIEW_CACHE[u] = self._review_url
     return self._review_url + self.projectname
@@ -657,7 +663,7 @@ class Remote(object):
     self._Set('url', self.url)
     self._Set('review', self.review)
     self._Set('projectname', self.projectname)
-    self._Set('fetch', map(str, self.fetch))
+    self._Set('fetch', list(map(str, self.fetch)))
 
   def _Set(self, key, value):
     key = 'remote.%s.%s' % (self.name, key)
